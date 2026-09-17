@@ -4,6 +4,7 @@ import time
 import threading
 from utils.logger import logger
 from utils.gpu import clear_vram
+from config.settings import Config
 from modules.input_handler import scan_and_prepare_input, extract_audio
 from modules.audio_sep import separate_audio
 from modules.stt_engine import transcribe_english, merge_short_segments, save_transcript_to_txt
@@ -14,11 +15,10 @@ from modules.exporter import merge_audio_tracks, render_final_video
 
 def preload_models_in_background():
     try:
-        logger.info(" [Background Worker] NLLB-200 এবং Whisper মডেল প্রি-লোড শুরু হচ্ছে...")
-        from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-        from config.settings import Config
-        AutoTokenizer.from_pretrained(Config.TRANSLATOR_MODEL, src_lang="eng_Latn")
-        AutoModelForSeq2SeqLM.from_pretrained(Config.TRANSLATOR_MODEL)
+        logger.info(" [Background Worker] Qwen এবং Whisper মডেল কনফিগারেশন চেক শুরু হচ্ছে...")
+        from transformers import AutoTokenizer, AutoModelForCausalLM
+        AutoTokenizer.from_pretrained(Config.TRANSLATION_MODEL_NAME)
+        AutoModelForCausalLM.from_pretrained(Config.TRANSLATION_MODEL_NAME)
         logger.info(" [Background Worker] মডেল প্রি-লোড সম্পন্ন হয়েছে!")
     except Exception as e:
         logger.warning(f" [Background Worker] ব্যাকগ্রাউন্ড মডেল লোডিং সতর্কবার্তা: {e}")
@@ -29,9 +29,9 @@ def main():
     logger.info("        AutoDubber Master Engine System           ")
     logger.info("==================================================")
     
-    input_dir = "inputs"
-    output_dir = "outputs"
-    temp_dir = "temp"
+    input_dir = Config.INPUT_DIR
+    output_dir = Config.OUTPUT_DIR
+    temp_dir = Config.TEMP_DIR
     
     os.makedirs(temp_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
@@ -67,7 +67,7 @@ def main():
         save_transcript_to_txt(segments, raw_txt_path)
         
         # Step 4: Machine Translation (EN -> BN)
-        logger.info("[ধাপ ৪/৭] ইংরেজি থেকে বাংলা অনুবাদ করা হচ্ছে (NLLB-200)...")
+        logger.info("[ধাপ ৪/৭] ইংরেজি থেকে বাংলা অনুবাদ করা হচ্ছে (Qwen2.5)...")
         translated_segments = translate_en_to_bn(segments)
         logger.info(f"অনুবাদ সম্পন্ন: {len(translated_segments)} সেগমেন্ট")
         
@@ -77,7 +77,7 @@ def main():
         
         # Step 5: Bengali TTS Generation
         logger.info("[ধাপ ৫/৭] বাংলা ভয়েস ওভার জেনারেট করা হচ্ছে (Edge-TTS)...")
-        tts_segments = generate_bn_tts(translated_segments, temp_dir)
+        tts_segments = generate_bn_tts(translated_segments, temp_dir, voice=Config.TTS_VOICE)
         logger.info(f"TTS জেনারেশন সম্পন্ন: {len(tts_segments)} অডিও ফাইল")
         
         # Step 6: Dynamic Time Stretching & Lip-Sync Alignment
@@ -94,11 +94,12 @@ def main():
         mixed_audio = os.path.join(temp_dir, "final_mix.wav")
         output_video = os.path.join(output_dir, "final_dubbed_video.mp4")
         
-        merge_audio_tracks(synced_vocal, bgm_path, mixed_audio)
+        merge_audio_tracks(str(synced_vocal), bgm_path, mixed_audio)
         render_final_video(video_path, mixed_audio, output_video)
         
         # Temp Cleanup & VRAM Clear
-        shutil.rmtree(temp_dir)
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
         clear_vram()
         
         elapsed = round(time.time() - start_time, 2)

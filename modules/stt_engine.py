@@ -6,9 +6,13 @@ from utils.gpu import clear_vram
 from utils.logger import logger
 
 def transcribe_english(vocal_audio_path: str) -> list[dict]:
-    model = WhisperModel(Config.WHISPER_MODEL, device=Config.DEVICE, compute_type=Config.COMPUTE_TYPE)
+    model = WhisperModel(
+        Config.WHISPER_MODEL_SIZE, 
+        device=Config.DEVICE, 
+        compute_type=Config.COMPUTE_TYPE
+    )
     
-    # vad_filter=True যুক্ত করায় নীরবতা ও ব্যাকগ্রাউন্ড মিউজিক বাদ যাবে এবং সেগমেন্ট সঠিকভাবে কাটবে
+    # vad_filter=True যুক্ত করায় নীরবতা ও ব্যাকগ্রাউন্ড মিউজিক বাদ যাবে
     segments, _ = model.transcribe(
         vocal_audio_path, 
         language="en", 
@@ -50,7 +54,6 @@ def group_into_full_sentences(segments: list[dict], max_gap: float = 0.8, max_du
         duration = end - curr_start
         is_sentence_end = bool(re.search(r'[.!?]$', curr_text))
 
-        # সময়সীমা বেশি হয়ে গেলে বা বাক্য শেষ হলে সেগমেন্ট আলাদা করা হবে
         if curr_text and (gap > max_gap or is_sentence_end or duration > max_duration):
             grouped.append({
                 "start": curr_start,
@@ -99,5 +102,5 @@ def save_transcript_to_txt(segments: list[dict], output_path: str):
     except Exception as e:
         logger.error(f"ট্রান্সক্রিপ্ট সেভ করতে সমস্যা হয়েছে: {e}")
 
-def merge_short_segments(segments, min_duration=1.5):
+def merge_short_segments(segments: list[dict], min_duration: float = 1.5) -> list[dict]:
     return group_into_full_sentences(segments)
