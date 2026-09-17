@@ -1,3 +1,4 @@
+import os
 import re
 from faster_whisper import WhisperModel
 from config.settings import Config
@@ -65,6 +66,31 @@ def group_into_full_sentences(segments: list[dict], max_gap: float = 0.8) -> lis
 
     logger.info(f"স্মার্ট সেগমেন্টেশন: {len(segments)} টি টুকরো → {len(grouped)} টি পূর্ণ বাক্যে রূপান্তরিত।")
     return grouped
+
+def save_transcript_to_txt(segments: list[dict], output_path: str):
+    """
+    Whisper ট্রান্সক্রিপ্ট টেক্সট ফাইলে সেভ করার ফাংশন।
+    """
+    try:
+        os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("==================================================\n")
+            f.write("      ORIGINAL ENGLISH TRANSCRIPTION (WHISPER)    \n")
+            f.write("==================================================\n\n")
+            
+            for idx, seg in enumerate(segments, 1):
+                start = seg.get('start', 0.0)
+                end = seg.get('end', 0.0)
+                duration = end - start
+                text = seg.get('text', '')
+                
+                f.write(f"[{idx:03d}] TIME: {start:.2f}s -> {end:.2f}s (Duration: {duration:.2f}s)\n")
+                f.write(f"TEXT : {text}\n")
+                f.write("-" * 50 + "\n")
+                
+        logger.info(f"ইংরেজি ট্রান্সক্রিপ্ট সফলভাবে সেভ হয়েছে: {output_path}")
+    except Exception as e:
+        logger.error(f"ট্রান্সক্রিপ্ট সেভ করতে সমস্যা হয়েছে: {e}")
 
 def merge_short_segments(segments, min_duration=1.5):
     return group_into_full_sentences(segments)

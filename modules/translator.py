@@ -1,92 +1,78 @@
+import os
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from config.settings import Config
+from utils.gpu import clear_vram
 from utils.logger import logger
 
-class BengaliTranslator:
-    def __init__(self):
-        self.device = getattr(Config, "DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
-        model_name = getattr(Config, "TRANSLATOR_MODEL", "facebook/nllb-200-distilled-600M")
-        logger.info("NLLB-200 অনুবাদ মডিউল জিপিইউতে লোড হচ্ছে...")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang="eng_Latn")
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(self.device)
+def translate_en_to_bn(segments: list[dict]) -> list[dict]:
+    """
+    NLLB-200 দিয়ে সেগমেন্টভিত্তিক ইংরেজি থেকে বাংলা অনুবাদের ফাংশন।
+    """
+    if not segments:
+        return []
 
-    def translate_batch(self, text_list):
-        if not text_list:
-            return []
-        
-        clean_texts = []
-        for item in text_list:
-            if isinstance(item, dict):
-                clean_texts.append(str(item.get('text', '')))
-            elif hasattr(item, 'text'):
-                clean_texts.append(str(item.text))
-            else:
-                clean_texts.append(str(item))
+    logger.info("NLLB-200 অনুবাদ মডেল লোড করা হচ্ছে...")
+    tokenizer = AutoTokenizer.from_pretrained(Config.TRANSLATOR_MODEL, src_lang="eng_Latn")
+    model = AutoModelForSeq2SeqLM.from_pretrained(Config.TRANSLATOR_MODEL).to(Config.DEVICE)
 
-        forced_bos_token_id = self.tokenizer.convert_tokens_to_ids("ben_Beng")
-        inputs = self.tokenizer(clean_texts, return_tensors="pt", padding=True, truncation=True).to(self.device)
+    translated_segments = []
+
+    for idx, seg in enumerate(segments):
+        english_text = seg.get("text", "").strip()
         
-        with torch.no_grad():
-            translated_tokens = self.model.generate(
+        if not english_text:
+            seg["translated_text"] = ""
+            translated_segments.append(seg)
+            continue
+
+        try:
+            inputs = tokenizer(english_text, return_tensors="pt").to(Config.DEVICE)
+            translated_tokens = model.generate(
                 **inputs,
-                forced_bos_token_id=forced_bos_token_id,
+                forced_bos_token_id=tokenizer.lang_code_to_id["ben_Beng"],
                 max_length=256
             )
-        
-        return self.tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)
+            bn_text = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
+            
+            seg_copy = dict(seg)
+            seg_copy["translated_text"] = bn_text.strip()
+            translated_segments.append(seg_copy)
+            
+        except Exception as e:
+            logger.error(f"অনুবাদে সমস্যা (সেগমেন্ট {idx}): {e}")
+            seg_copy = dict(seg)
+            seg_copy["translated_text"] = english_text
+            translated_segments.append(seg_copy)
 
-_translator_instance = None
+    del model
+    del tokenizer
+    clear_vram()
+    return translated_segments
 
-def translate_en_to_bn(text_data):
-    global _translator_instance
-    if _translator_instance is None:
-        _translator_instance = BengaliTranslator()
-    
-    if isinstance(text_data, str):
-        res = _translator_instance.translate_batch([text_data])
-        return res[0] if res else text_data
-    
-    elif isinstance(text_data, list):
-        # Extract texts only for translation
-        texts = []
-        for seg in text_data:
-            if isinstance(seg, dict):
-                texts.append(seg.get('text', ''))
-            elif hasattr(seg, 'text'):
-                texts.append(seg.text)
-            else:
-                texts.append(str(seg))
-        
-        translated_texts = _translator_instance.translate_batch(texts)
-        
-        # ⭐ Merge translated text back with original start/end timestamps
-        # This preserves ALL timing information for downstream sync operations
-        merged = []
-        for seg, tr_text in zip(text_data, translated_texts):
-            if isinstance(seg, dict):
-                merged.append({
-                    "start": seg.get("start", 0.0),
-                    "end": seg.get("end", 0.0),
-                    "text": seg.get("text", ""),
-                    "translated_text": tr_text
-                })
-            elif hasattr(seg, 'start') and hasattr(seg, 'end'):
-                merged.append({
-                    "start": seg.start,
-                    "end": seg.end,
-                    "text": getattr(seg, 'text', ''),
-                    "translated_text": tr_text
-                })
-            else:
-                merged.append({
-                    "start": 0.0,
-                    "end": 0.0,
-                    "text": str(seg),
-                    "translated_text": tr_text
-                })
-        return merged
-    
-    else:
-        res = _translator_instance.translate_batch([str(text_data)])
-        return res[0] if res else str(text_data)
+def save_translation_to_txt(segments: list[dict], output_path: str):
+    """
+    ইংরেজি এবং তার বাংলা অনুবাদ একসাথে বিশ্লেষণাত্মক TXT ফাইলে সেভ করার ফাংশন।
+    """
+    try:
+        os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("==================================================\n")
+            f.write("   FULL DUBBING ANALYSIS (ENGLISH -> BENGALI)     \n")
+            f.write("==================================================\n\n")
+            
+            for idx, seg in enumerate(segments, 1):
+                start = seg.get('start', 0.0)
+                end = seg.get('end', 0.0)
+                duration = end - start
+                en_text = seg.get('text', '')
+                bn_text = seg.get('translated_text', '')
+                
+                f.write(f"[{idx:03d}] TIME: {start:.2f}s -> {end:.2f}s | DURATION: {duration:.2f}s\n")
+                f.write(f"EN : {en_text}\n")
+                f.write(f"BN : {bn_text}\n")
+                f.write("-" * 60 + "\n")
+                
+        logger.info(f"অনুবাদ সহ পূর্ণাঙ্গ এনালাইসিস ফাইল সেভ হয়েছে: {output_path}")
+    except Exception as e:
+        logger.error(f"অনুবাদ ফাইল সেভ করতে সমস্যা হয়েছে: {e}")

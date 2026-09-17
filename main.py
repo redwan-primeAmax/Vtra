@@ -6,19 +6,17 @@ from utils.logger import logger
 from utils.gpu import clear_vram
 from modules.input_handler import scan_and_prepare_input, extract_audio
 from modules.audio_sep import separate_audio
-from modules.stt_engine import transcribe_english, merge_short_segments
-from modules.translator import translate_en_to_bn
+from modules.stt_engine import transcribe_english, merge_short_segments, save_transcript_to_txt
+from modules.translator import translate_en_to_bn, save_translation_to_txt
 from modules.tts_engine import generate_bn_tts
 from modules.time_sync import sync_and_merge_segments, get_audio_duration
 from modules.exporter import merge_audio_tracks, render_final_video
 
-# ব্যাকগ্রাউন্ড মডেল প্রি-লোডার ফাংশন
 def preload_models_in_background():
     try:
         logger.info(" [Background Worker] NLLB-200 এবং Whisper মডেল প্রি-লোড শুরু হচ্ছে...")
         from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
         from config.settings import Config
-        # মডেল ক্যাশ নিশ্চিতকরণ
         AutoTokenizer.from_pretrained(Config.TRANSLATOR_MODEL, src_lang="eng_Latn")
         AutoModelForSeq2SeqLM.from_pretrained(Config.TRANSLATOR_MODEL)
         logger.info(" [Background Worker] মডেল প্রি-লোড সম্পন্ন হয়েছে!")
@@ -48,7 +46,7 @@ def main():
         total_duration = get_audio_duration(raw_audio)
         logger.info(f"ভিডিও ডিউরেশন: {total_duration:.2f} সেকেন্ড")
         
-        # Step 1 এর পর ব্যাকগ্রাউন্ডে পরবর্তী ধাপের AI মডেল লোড শুরু
+        # ব্যাকগ্রাউন্ড মডেল প্রি-লোড
         preload_thread = threading.Thread(target=preload_models_in_background, daemon=True)
         preload_thread.start()
         
@@ -58,16 +56,24 @@ def main():
         
         # Step 3: English Speech-to-Text (Whisper)
         logger.info("[ধাপ ৩/৭] ইংরেজি স্পিচ-টু-টেক্সট প্রসেসিং (faster-whisper)...")
-        segments = transcribe_english(vocal_path)
-        logger.info(f"Whisper থেকে মোট {len(segments)} টি সেগমেন্ট পাওয়া গেছে।")
+        raw_segments = transcribe_english(vocal_path)
+        logger.info(f"Whisper থেকে মোট {len(raw_segments)} টি কাঁচা সেগমেন্ট পাওয়া গেছে।")
         
-        segments = merge_short_segments(segments, min_duration=1.5)
-        logger.info(f"মার্জিং এর পর মোট {len(segments)} টি সেগমেন্ট।")
+        segments = merge_short_segments(raw_segments, min_duration=1.5)
+        logger.info(f"স্মার্ট রি-গ্রুপিং এর পর মোট {len(segments)} টি বাক্য।")
+        
+        # 📄 ১. মূল ইংরেজি ট্রান্সক্রিপ্ট টেক্সট ফাইলে সেভ
+        raw_txt_path = os.path.join(output_dir, "english_transcript.txt")
+        save_transcript_to_txt(segments, raw_txt_path)
         
         # Step 4: Machine Translation (EN -> BN)
         logger.info("[ধাপ ৪/৭] ইংরেজি থেকে বাংলা অনুবাদ করা হচ্ছে (NLLB-200)...")
         translated_segments = translate_en_to_bn(segments)
         logger.info(f"অনুবাদ সম্পন্ন: {len(translated_segments)} সেগমেন্ট")
+        
+        # 📄 ২. ইংরেজি + বাংলা অনুবাদ এনালাইসিস ফাইলে সেভ
+        analysis_txt_path = os.path.join(output_dir, "translation_analysis.txt")
+        save_translation_to_txt(translated_segments, analysis_txt_path)
         
         # Step 5: Bengali TTS Generation
         logger.info("[ধাপ ৫/৭] বাংলা ভয়েস ওভার জেনারেট করা হচ্ছে (Edge-TTS)...")
@@ -98,7 +104,9 @@ def main():
         elapsed = round(time.time() - start_time, 2)
         logger.info("==================================================")
         logger.info(f" ডাবিং সফলভাবে শেষ হয়েছে! মোট সময়: {elapsed}s")
-        logger.info(f" ফাইল সেভ হয়েছে: {output_video}")
+        logger.info(f" ১. ফাইনাল ভিডিও: {output_video}")
+        logger.info(f" ২. মূল ট্রান্সক্রিপ্ট: {raw_txt_path}")
+        logger.info(f" ৩. অনুবাদ এনালাইসিস ফাইল: {analysis_txt_path}")
         logger.info("==================================================")
 
     except Exception as e:
