@@ -1,2 +1,0 @@
-# Vtra
-A video translator
