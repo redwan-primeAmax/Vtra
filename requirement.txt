@@ -1,0 +1,9 @@
+torch
+faster-whisper
+transformers
+demucs
+edge-tts
+soundfile
+numpy
+ffmpeg-python
+setuptools
