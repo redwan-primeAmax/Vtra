@@ -2,6 +2,7 @@ import os
 import numpy as np
 import soundfile as sf
 import pyrubberband as pyrb
+import scipy.signal
 from config.settings import Config
 from utils.logger import logger
 
@@ -91,7 +92,8 @@ def sync_and_merge_segments(*args, **kwargs):
         output_dir=output_dir
     )
 
-    target_sr = 44100
+    # Edge-TTS অডিওর স্যাম্পল রেট মেলাতে target_sr = 24000 করা হয়েছে
+    target_sr = 24000
     max_end = max([float(_get_val(seg, 'end', 0.0) or 0.0) for seg in whisper_segments], default=300.0)
     total_samples = int((max_end + 10.0) * target_sr)
     combined = np.zeros(total_samples, dtype=np.float32)
@@ -110,6 +112,11 @@ def sync_and_merge_segments(*args, **kwargs):
             y, sr = sf.read(str(audio_path))
             if len(y.shape) > 1:
                 y = np.mean(y, axis=1)
+
+            # স্যাম্পল রেট অমিল থাকলে রিস্যাম্পল করার লজিক
+            if sr != target_sr:
+                num_samples = int(len(y) * target_sr / sr)
+                y = scipy.signal.resample(y, num_samples)
 
             start = float(_get_val(seg, 'start', 0.0) or 0.0)
             actual_start = max(start, current_timeline_position)
