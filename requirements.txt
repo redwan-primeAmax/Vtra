@@ -1,0 +1,9 @@
+torch
+transformers
+faster-whisper
+soundfile
+numpy
+pydantic
+psutil
+accelerate
+huggingface-hub

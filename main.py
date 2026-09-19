@@ -1,121 +1,96 @@
-import os
+import logging
 import shutil
-import time
-import threading
-from utils.logger import logger
-from utils.gpu import clear_vram
-from config.settings import Config
-from modules.input_handler import scan_and_prepare_input, extract_audio
-from modules.audio_sep import separate_audio
-from modules.stt_engine import transcribe_english, merge_short_segments, save_transcript_to_txt
-from modules.translator import translate_en_to_bn, save_translation_to_txt
-from modules.tts_engine import generate_bn_tts
-from modules.time_sync import sync_and_merge_segments, get_audio_duration
-from modules.exporter import merge_audio_tracks, render_final_video
+from pathlib import Path
+from dubbing.config import DubbingConfig
+from dubbing.pipeline import DubbingPipeline
+from dubbing.errors import DubbingError
 
-def preload_models_in_background():
-    try:
-        logger.info(" [Background Worker] Qwen এবং Whisper মডেল কনফিগারেশন চেক শুরু হচ্ছে...")
-        from transformers import AutoTokenizer, AutoModelForCausalLM
-        AutoTokenizer.from_pretrained(Config.TRANSLATION_MODEL_NAME)
-        AutoModelForCausalLM.from_pretrained(Config.TRANSLATION_MODEL_NAME)
-        logger.info(" [Background Worker] মডেল প্রি-লোড সম্পন্ন হয়েছে!")
-    except Exception as e:
-        logger.warning(f" [Background Worker] ব্যাকগ্রাউন্ড মডেল লোডিং সতর্কবার্তা: {e}")
+# লগিং কনফিগারেশন
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger("main")
 
-def main():
-    start_time = time.time()
-    logger.info("==================================================")
-    logger.info("        AutoDubber Master Engine System           ")
-    logger.info("==================================================")
+def process_videos():
+    # Google Drive পাথ
+    drive_input_dir = Path("/content/drive/MyDrive/Video/input")
+    drive_output_dir = Path("/content/drive/MyDrive/Video/output")
     
-    input_dir = Config.INPUT_DIR
-    output_dir = Config.OUTPUT_DIR
-    temp_dir = Config.TEMP_DIR
+    if not drive_input_dir.exists():
+        drive_input_dir = Path("/content/drive/Video/input")
+        drive_output_dir = Path("/content/drive/Video/output")
+
+    drive_input_dir.mkdir(parents=True, exist_ok=True)
+    drive_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # স্থানীয় Colab ডিরেক্টরি (সর্বোচ্চ স্পিডের জন্য)
+    local_base_dir = Path("/content/local_workspace")
+    local_input_dir = local_base_dir / "input"
+    local_output_dir = local_base_dir / "output"
     
-    os.makedirs(temp_dir, exist_ok=True)
-    os.makedirs(output_dir, exist_ok=True)
-    
-    try:
-        # Step 1: Input Detection & Auto Conversion
-        logger.info("[ধাপ ১/৭] ইনপুট ফাইল প্রসেসিং...")
-        video_path = scan_and_prepare_input(input_dir, temp_dir)
+    local_input_dir.mkdir(parents=True, exist_ok=True)
+    local_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ড্রাইভে ভিডিও ফাইল খোঁজা
+    video_files = list(drive_input_dir.glob("*.mp4")) + list(drive_input_dir.glob("*.mkv"))
+
+    if not video_files:
+        logger.warning(f"কোনো ভিডিও ফাইল পাওয়া যায়নি! ফাইল রাখুন এখানে: {drive_input_dir}")
+        return
+
+    logger.info(f"মোট {len(video_files)} টি ভিডিও প্রসেস করা হবে।")
+
+    for index, drive_video_path in enumerate(video_files, start=1):
+        filename = drive_video_path.name
+        stem = drive_video_path.stem
         
-        raw_audio = os.path.join(temp_dir, "extracted.wav")
-        extract_audio(video_path, raw_audio)
-        total_duration = get_audio_duration(raw_audio)
-        logger.info(f"ভিডিও ডিউরেশন: {total_duration:.2f} সেকেন্ড")
-        
-        # ব্যাকগ্রাউন্ড মডেল প্রি-লোড
-        preload_thread = threading.Thread(target=preload_models_in_background, daemon=True)
-        preload_thread.start()
-        
-        # Step 2: Audio Separation (Demucs)
-        logger.info("[ধাপ ২/৭] BGM এবং Vocal স্প্লিট করা হচ্ছে (Demucs)...")
-        vocal_path, bgm_path = separate_audio(raw_audio, temp_dir)
-        
-        # Step 3: English Speech-to-Text (Whisper)
-        logger.info("[ধাপ ৩/৭] ইংরেজি স্পিচ-টু-টেক্সট প্রসেসিং (faster-whisper)...")
-        raw_segments = transcribe_english(vocal_path)
-        logger.info(f"Whisper থেকে মোট {len(raw_segments)} টি কাঁচা সেগমেন্ট পাওয়া গেছে।")
-        
-        segments = merge_short_segments(raw_segments, min_duration=1.5)
-        logger.info(f"স্মার্ট রি-গ্রুপিং এর পর মোট {len(segments)} টি বাক্য।")
-        
-        # 📄 ১. মূল ইংরেজি ট্রান্সক্রিপ্ট টেক্সট ফাইলে সেভ
-        raw_txt_path = os.path.join(output_dir, "english_transcript.txt")
-        save_transcript_to_txt(segments, raw_txt_path)
-        
-        # Step 4: Machine Translation (EN -> BN)
-        logger.info("[ধাপ ৪/৭] ইংরেজি থেকে বাংলা অনুবাদ করা হচ্ছে (Qwen2.5)...")
-        translated_segments = translate_en_to_bn(segments)
-        logger.info(f"অনুবাদ সম্পন্ন: {len(translated_segments)} সেগমেন্ট")
-        
-        # 📄 ২. ইংরেজি + বাংলা অনুবাদ এনালাইসিস ফাইলে সেভ
-        analysis_txt_path = os.path.join(output_dir, "translation_analysis.txt")
-        save_translation_to_txt(translated_segments, analysis_txt_path)
-        
-        # Step 5: Bengali TTS Generation
-        logger.info("[ধাপ ৫/৭] বাংলা ভয়েস ওভার জেনারেট করা হচ্ছে (Edge-TTS)...")
-        tts_segments = generate_bn_tts(translated_segments, temp_dir, voice=Config.TTS_VOICE)
-        logger.info(f"TTS জেনারেশন সম্পন্ন: {len(tts_segments)} অডিও ফাইল")
-        
-        # Step 6: Dynamic Time Stretching & Lip-Sync Alignment
-        logger.info("[ধাপ ৬/৭] অডিও টাইম-স্ট্রেচিং ও সিঙ্কিং প্রসেস চালিত হচ্ছে...")
-        synced_vocal = sync_and_merge_segments(
-            tts_audio_paths=tts_segments,
-            whisper_segments=translated_segments,
-            output_dir=os.path.join(temp_dir, "synced"),
-            output_file=os.path.join(temp_dir, "final_vocals.wav")
+        logger.info(f"\n==========================================")
+        logger.info(f"[{index}/{len(video_files)}] ফাইল শনাক্ত হয়েছে: {filename}")
+        logger.info(f"==========================================")
+
+        # ১. ফাইল Colab-এর লোকাল এনভায়রনমেন্টে কপি করা (Fast I/O)
+        local_video_path = local_input_dir / filename
+        logger.info(f"Colab লোকাল স্টোরেজে ফাইল কপি করা হচ্ছে: {filename}...")
+        shutil.copy2(drive_video_path, local_video_path)
+
+        local_output_video = local_output_dir / f"dubbed_{stem}.mp4"
+        local_work_dir = local_base_dir / f"work_{stem}"
+
+        # ২. কনফিগারেশন সেটআপ (লোকাল পাথে)
+        config = DubbingConfig(
+            input_video=local_video_path,
+            output_video=local_output_video,
+            work_dir=local_work_dir,
+            compute_type="float16"
         )
-        
-        # Step 7: Final Audio-Video Merging
-        logger.info("[ধাপ ৭/৭] চূড়ান্ত ভিডিও মার্জ ও ইউনিভার্সাল H.264 এনকোডিং...")
-        mixed_audio = os.path.join(temp_dir, "final_mix.wav")
-        output_video = os.path.join(output_dir, "final_dubbed_video.mp4")
-        
-        merge_audio_tracks(str(synced_vocal), bgm_path, mixed_audio)
-        render_final_video(video_path, mixed_audio, output_video)
-        
-        # Temp Cleanup & VRAM Clear
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-        clear_vram()
-        
-        elapsed = round(time.time() - start_time, 2)
-        logger.info("==================================================")
-        logger.info(f" ডাবিং সফলভাবে শেষ হয়েছে! মোট সময়: {elapsed}s")
-        logger.info(f" ১. ফাইনাল ভিডিও: {output_video}")
-        logger.info(f" ২. মূল ট্রান্সক্রিপ্ট: {raw_txt_path}")
-        logger.info(f" ৩. অনুবাদ এনালাইসিস ফাইল: {analysis_txt_path}")
-        logger.info("==================================================")
 
-    except Exception as e:
-        logger.critical(f"❌ পাইপলাইন এক্সিকিউশনে সমস্যা ঘটেছে: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+        try:
+            # ৩. ডাবিং পাইপলাইন চালানো
+            pipeline = DubbingPipeline(config)
+            pipeline.run()
+
+            # ৪. প্রসেস করা শেষ হলে আউটপুট ফাইল ড্রাইভ-এ ব্যাকআপ নেওয়া
+            drive_final_output = drive_output_dir / f"dubbed_{stem}.mp4"
+            logger.info(f"আউটপুট ফাইল Google Drive-এ ট্রান্সফার করা হচ্ছে: {drive_final_output.name}")
+            shutil.copy2(local_output_video, drive_final_output)
+
+            logger.info(f"সফলভাবে ড্রাইভে সেভ হয়েছে: {drive_final_output}")
+
+        except DubbingError as e:
+            logger.error(f"ডাবিং পাইপলাইনে ত্রুটি [{filename}]: {str(e)}")
+        except Exception as e:
+            logger.error(f"অপ্রত্যাশিত ত্রুটি [{filename}]: {str(e)}", exc_info=True)
+        
+        finally:
+            # ৫. ডিস্ক স্পেস খালি করতে লোকাল অস্থায়ী ফাইল মুছে ফেলা
+            if local_video_path.exists():
+                local_video_path.unlink()
+            if local_output_video.exists():
+                local_output_video.unlink()
+            if local_work_dir.exists():
+                shutil.rmtree(local_work_dir, ignore_errors=True)
+            logger.info("লোকাল টেম্পোরারি ফাইল পরিষ্কার করা হয়েছে।")
 
 if __name__ == "__main__":
-    main()
+    process_videos()
