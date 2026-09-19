@@ -8,7 +8,6 @@ from dubbing.errors import DubbingError
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("main")
 
-# সাপোর্ট করা সমস্ত ভিডিও ফরম্যাট
 SUPPORTED_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".flv", ".wmv", ".m4v", ".ts"}
 
 def process_videos():
@@ -29,7 +28,6 @@ def process_videos():
     local_input_dir.mkdir(parents=True, exist_ok=True)
     local_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ড্রাইভে থাকা সব সাপোর্টেড ফরম্যাটের ভিডিও খুঁজে বের করা
     video_files = [
         f for f in drive_input_dir.iterdir() 
         if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
@@ -46,7 +44,7 @@ def process_videos():
         stem = drive_video_path.stem
         
         logger.info(f"\n==========================================")
-        logger.info(f"[{index}/{len(video_files)}] ফাইল শনাক্ত হয়েছে: {filename}")
+        logger.info(f"[{index}/{len(video_files)}] প্রসেসিং শুরু: {filename}")
         logger.info(f"==========================================")
 
         local_video_path = local_input_dir / filename

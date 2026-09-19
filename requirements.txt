@@ -1,10 +1,10 @@
 torch
 transformers
 faster-whisper
+deepmultilingualpunctuation
 soundfile
 numpy
 pydantic
 psutil
 accelerate
 huggingface-hub
-deepmultilingualpunctuation
