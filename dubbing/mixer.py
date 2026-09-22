@@ -1,82 +1,125 @@
 import subprocess
-import json
 from pathlib import Path
 from typing import List, Dict
 import soundfile as sf
-import numpy as np
+from dubbing.memory import flush_memory
 
-def time_fit_and_mix(items: List[Dict], total_duration: float, output_mixed_wav: Path):
-    target_sr = 24000
-    canvas = np.zeros(int(total_duration * target_sr), dtype=np.float32)
+def get_video_duration(video_path: Path) -> float:
+    cmd = [
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    return float(res.stdout.strip())
+
+def get_audio_duration(wav_path: Path) -> float:
+    data, sr = sf.read(str(wav_path))
+    return len(data) / float(sr)
+
+def sync_and_assemble_video(
+    video_path: Path, 
+    items: List[Dict], 
+    output_dir: Path, 
+    output_video: Path
+):
+    """
+    ভিডিওর নীরব অংশ এবং স্পিচ অংশ আলাদা ব্লকে বিভক্ত করে
+    অডিওর সাথে পারফেক্ট সিঙ্ক ও গ্যাপ বজায় রেখে ফাইনাল ভিডিও তৈরি করে।
+    """
+    total_duration = get_video_duration(video_path)
+    blocks = []
+    current_time = 0.0
 
     for item in items:
-        wav_path = Path(item["tts_wav"])
-        start_sec = item["start"]
-        data, sr = sf.read(str(wav_path))
+        v_start = item["start"]
+        v_end = item["end"]
 
-        if len(data.shape) > 1:
-            data = data.mean(axis=1)
+        # ১. স্পিচের মধ্যবর্তী নীরব অংশ (Gap Block)
+        if v_start > current_time + 0.05:
+            blocks.append({
+                "v_start": current_time,
+                "v_end": v_start,
+                "tts_wav": None,
+                "is_gap": True
+            })
 
-        if sr != target_sr:
-            num_samples = int(len(data) * target_sr / sr)
-            data = np.interp(np.linspace(0, len(data), num_samples), np.arange(len(data)), data)
+        # ২. প্রধান কথা বলার অংশ (Speech Block)
+        blocks.append({
+            "v_start": v_start,
+            "v_end": max(v_end, v_start + 0.1),
+            "tts_wav": Path(item["tts_wav"]),
+            "is_gap": False
+        })
+        current_time = max(v_end, current_time)
 
-        start_idx = int(start_sec * target_sr)
-        end_idx = min(start_idx + len(data), len(canvas))
-        clip_len = end_idx - start_idx
+    # ৩. শেষ স্পিচ থেকে ভিডিওর শেষ পর্যন্ত অংশ
+    if current_time < total_duration - 0.05:
+        blocks.append({
+            "v_start": current_time,
+            "v_end": total_duration,
+            "tts_wav": None,
+            "is_gap": True
+        })
 
-        if clip_len > 0:
-            canvas[start_idx:end_idx] += data[:clip_len]
+    concat_list_path = output_dir / "concat_list.txt"
 
-    max_val = np.max(np.abs(canvas))
-    if max_val > 0:
-        canvas = canvas / max_val * 0.95
+    with open(concat_list_path, "w", encoding="utf-8") as f_concat:
+        for idx, block in enumerate(blocks):
+            v_start = block["v_start"]
+            v_end = block["v_end"]
+            v_dur = max(v_end - v_start, 0.1)
+            seg_video_path = output_dir / f"block_{idx:04d}.mp4"
 
-    sf.write(str(output_mixed_wav), canvas, target_sr)
+            if block["is_gap"]:
+                ffmpeg_cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", f"{v_start:.3f}",
+                    "-to", f"{v_end:.3f}",
+                    "-i", str(video_path),
+                    "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+                    "-map", "0:v:0",
+                    "-map", "1:a:0",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-shortest",
+                    str(seg_video_path)
+                ]
+            else:
+                tts_wav = block["tts_wav"]
+                audio_dur = get_audio_duration(tts_wav)
+                pts_ratio = audio_dur / v_dur
 
-def get_video_codec(video_path: Path) -> str:
-    cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=codec_name", "-of", "default=noprint_wrappers=1:nokey=1",
-        str(video_path)
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    return res.stdout.strip().lower()
+                ffmpeg_cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", f"{v_start:.3f}",
+                    "-to", f"{v_end:.3f}",
+                    "-i", str(video_path),
+                    "-i", str(tts_wav),
+                    "-filter_complex", f"[0:v]setpts={pts_ratio:.4f}*PTS[v]",
+                    "-map", "[v]",
+                    "-map", "1:a:0",
+                    "-c:v", "libx264", "-preset", "ultrafast",
+                    "-c:a", "aac", "-b:a", "192k",
+                    str(seg_video_path)
+                ]
 
-def assemble_final_video(video_path: Path, audio_wav: Path, output_video: Path):
-    """
-    ভিডিও কোডেক চেক করে সিদ্ধান্ত নেয় স্ট্রিম কপি করবে নাকি T4 GPU দিয়ে এনকোড করবে।
-    .webm (VP8/VP9) ফাইলগুলোকে GPU Hardware Acceleration দিয়ে H.264 এ কনভার্ট করে।
-    """
-    codec = get_video_codec(video_path)
-    ext = video_path.suffix.lower()
+            res = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+            if res.returncode != 0:
+                raise RuntimeError(f"Block assembly failed [{idx}]: {res.stderr}")
 
-    # যদি ফাইল WebM হয় বা কোডেক VP8/VP9 হয় তবে GPU দিয়ে H.264 এনকোড করবে
-    needs_reencode = ext == ".webm" or codec in ["vp8", "vp9", "theora", "av1"]
+            f_concat.write(f"file '{seg_video_path.resolve()}'\n")
 
-    if needs_reencode:
-        vcodec_args = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"] # Colab T4 GPU এনকোডার
-    else:
-        vcodec_args = ["-c:v", "copy"]
-
-    cmd = [
+    concat_cmd = [
         "ffmpeg", "-y",
-        "-i", str(video_path),
-        "-i", str(audio_wav),
-        *vcodec_args,
-        "-c:a", "aac", "-b:a", "192k",
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-shortest",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(concat_list_path),
+        "-c", "copy",
         str(output_video)
     ]
-    
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    
-    # NVENC কোনো কারণে ফেল করলে CPU ফলব্যাক (libx264)
-    if res.returncode != 0 and needs_reencode:
-        cmd[cmd.index("h264_nvenc")] = "libx264"
-        res = subprocess.run(cmd, capture_output=True, text=True)
 
+    res = subprocess.run(concat_cmd, capture_output=True, text=True)
     if res.returncode != 0:
-        raise RuntimeError(f"FFmpeg ভিডিও অ্যাসেম্বলি ব্যর্থ: {res.stderr}")
+        raise RuntimeError(f"Final Video Concat failed: {res.stderr}")
+
+    flush_memory()
