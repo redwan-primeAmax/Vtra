@@ -18,14 +18,12 @@ def get_audio_duration(wav_path: Path) -> float:
 
 def sync_and_assemble_video(
     video_path: Path, 
+    bgm_wav: Path,
     items: List[Dict], 
     output_dir: Path, 
-    output_video: Path
+    output_video: Path,
+    bgm_volume: float = 0.3
 ):
-    """
-    ভিডিওর নীরব অংশ এবং স্পিচ অংশ আলাদা ব্লকে বিভক্ত করে
-    অডিওর সাথে পারফেক্ট সিঙ্ক ও গ্যাপ বজায় রেখে ফাইনাল ভিডিও তৈরি করে।
-    """
     total_duration = get_video_duration(video_path)
     blocks = []
     current_time = 0.0
@@ -34,7 +32,6 @@ def sync_and_assemble_video(
         v_start = item["start"]
         v_end = item["end"]
 
-        # ১. স্পিচের মধ্যবর্তী নীরব অংশ (Gap Block)
         if v_start > current_time + 0.05:
             blocks.append({
                 "v_start": current_time,
@@ -43,7 +40,6 @@ def sync_and_assemble_video(
                 "is_gap": True
             })
 
-        # ২. প্রধান কথা বলার অংশ (Speech Block)
         blocks.append({
             "v_start": v_start,
             "v_end": max(v_end, v_start + 0.1),
@@ -52,7 +48,6 @@ def sync_and_assemble_video(
         })
         current_time = max(v_end, current_time)
 
-    # ৩. শেষ স্পিচ থেকে ভিডিওর শেষ পর্যন্ত অংশ
     if current_time < total_duration - 0.05:
         blocks.append({
             "v_start": current_time,
@@ -109,17 +104,33 @@ def sync_and_assemble_video(
 
             f_concat.write(f"file '{seg_video_path.resolve()}'\n")
 
+    temp_speech_video = output_dir / "temp_speech_video.mp4"
     concat_cmd = [
         "ffmpeg", "-y",
         "-f", "concat",
         "-safe", "0",
         "-i", str(concat_list_path),
         "-c", "copy",
+        str(temp_speech_video)
+    ]
+    res = subprocess.run(concat_cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"Video Concat failed: {res.stderr}")
+
+    final_mix_cmd = [
+        "ffmpeg", "-y",
+        "-i", str(temp_speech_video),
+        "-i", str(bgm_wav),
+        "-filter_complex", f"[1:a]volume={bgm_volume}[bgm];[0:a][bgm]amix=inputs=2:duration=first[a]",
+        "-map", "0:v:0",
+        "-map", "[a]",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k",
         str(output_video)
     ]
 
-    res = subprocess.run(concat_cmd, capture_output=True, text=True)
+    res = subprocess.run(final_mix_cmd, capture_output=True, text=True)
     if res.returncode != 0:
-        raise RuntimeError(f"Final Video Concat failed: {res.stderr}")
+        temp_speech_video.replace(output_video)
 
     flush_memory()

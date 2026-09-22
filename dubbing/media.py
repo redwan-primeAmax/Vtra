@@ -2,6 +2,7 @@ import subprocess
 import json
 from pathlib import Path
 from dubbing.errors import InputValidationError, AudioExtractionError
+from dubbing.memory import flush_memory
 
 def validate_input_file(video_path: Path) -> dict:
     if not video_path.exists():
@@ -24,17 +25,32 @@ def validate_input_file(video_path: Path) -> dict:
 
     return info
 
-def extract_audio(video_path: Path, output_wav: Path) -> Path:
-    """.webm ফাইলসহ সমস্ত কোডেড ভিডিও থেকে নিরাপদে ১৬kHz মনো অডিও এক্সট্র্যাক্ট করে।"""
+def extract_audio_and_bgm(video_path: Path, work_dir: Path) -> tuple[Path, Path]:
+    """
+    ১. ইনপুট ভিডিও থেকে অডিও এক্সট্র্যাক্ট করে।
+    ২. Demucs ব্যবহার করে আসল ব্যাকগ্রাউন্ড মিউজিক (BGM) পৃথক করে।
+    """
+    raw_wav = work_dir / "extracted_16k.wav"
     cmd = [
         "ffmpeg", "-y",
-        "-fflags", "+genpts",              # টাইমিং ফ্রেম ফিক্স করার জন্য
         "-i", str(video_path),
         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-        "-avoid_negative_ts", "make_zero", # নেগেটিভ টাইমস্ট্যাম্প ফিক্স
-        str(output_wav)
+        str(raw_wav)
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         raise AudioExtractionError(f"অডিও এক্সট্র্যাকশন ত্রুটি: {res.stderr}")
-    return output_wav
+
+    demucs_out = work_dir / "demucs_out"
+    demucs_cmd = [
+        "demucs", "--two-stems=vocals", "-n", "htdemucs",
+        "-o", str(demucs_out), str(raw_wav)
+    ]
+    subprocess.run(demucs_cmd, capture_output=True, text=True)
+
+    bgm_wav = demucs_out / "htdemucs" / "extracted_16k" / "no_vocals.wav"
+    if not bgm_wav.exists():
+        bgm_wav = raw_wav
+
+    flush_memory()
+    return raw_wav, bgm_wav

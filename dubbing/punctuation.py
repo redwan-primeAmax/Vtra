@@ -14,7 +14,8 @@ def restore_punctuation_and_sentences(segments: List[Dict], max_duration: float 
                 results.append({
                     "start": seg["start"],
                     "end": seg["end"],
-                    "text": text
+                    "text": text,
+                    "duration": round(seg["end"] - seg["start"], 2)
                 })
         return results
 
@@ -42,7 +43,8 @@ def restore_punctuation_and_sentences(segments: List[Dict], max_duration: float 
                 sentences.append({
                     "start": current_start,
                     "end": word_info["end"],
-                    "text": sentence_text
+                    "text": sentence_text,
+                    "duration": round(word_info["end"] - current_start, 2)
                 })
             current_words = []
             current_start = None

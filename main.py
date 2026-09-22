@@ -9,7 +9,7 @@ from dubbing.errors import DubbingError
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("main")
 
-API_KEY = "YOUR_GEMINI_API_KEY"  # আপনার Gemini API Key এখানে দিন
+API_KEY = "YOUR_GEMINI_API_KEY"  # আপনার Gemini API Key এখানে বসান
 
 def process_videos():
     drive_input_dir = Path("/content/drive/MyDrive/Video/input")
@@ -45,7 +45,8 @@ def process_videos():
             input_video=local_video_path,
             output_video=local_output_video,
             work_dir=local_work_dir,
-            api_key=API_KEY
+            api_key=API_KEY,
+            tts_voice="bn-BD-NabanitaNeural"
         )
 
         try:
@@ -54,7 +55,7 @@ def process_videos():
 
             drive_final_output = drive_output_dir / f"dubbed_{stem}.mp4"
             shutil.copy2(local_output_video, drive_final_output)
-            logger.info(f"ড্রাইভে ফাইল সেভ হয়েছে: {drive_final_output}")
+            logger.info(f"ড্রাইভে সেভ হয়েছে: {drive_final_output}")
 
         except DubbingError as e:
             logger.error(f"ডাবিং পাইপলাইনে ত্রুটি [{filename}]: {str(e)}")

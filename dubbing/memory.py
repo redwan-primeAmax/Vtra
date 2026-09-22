@@ -6,7 +6,7 @@ import logging
 logger = logging.getLogger("dubbing.memory")
 
 def flush_memory():
-    """VRAM এবং System RAM সম্পূর্ণ ক্লিয়ার করে।"""
+    """VRAM এবং System RAM সম্পূর্ণ খালি করে।"""
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
