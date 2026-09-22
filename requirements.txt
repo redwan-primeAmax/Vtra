@@ -7,4 +7,4 @@ psutil
 accelerate
 requests
 edge-tts
-demucs
+demuc
