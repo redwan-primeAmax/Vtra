@@ -79,4 +79,4 @@ def process_videos():
             if local_work_dir.exists(): shutil.rmtree(local_work_dir, ignore_errors=True)
 
 if __name__ == "__main__":
-    process_videos()
+    process_videos(
