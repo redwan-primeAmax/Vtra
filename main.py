@@ -9,7 +9,7 @@ from dubbing.errors import DubbingError
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("main")
 
-API_KEY = "AQ.Ab8RN6JheJErwSp_XG4bDefPMgEwHNBdRI1oS_la9Yjcry3Jug"  # আপনার Gemini API Key এখানে বসান
+API_KEY = "AQ.Ab8RN6L6T-mzH6OwH05BT2SfmK66ORAyOzMldqk7hqxxJEdSxw"  # আপনার Gemini API Key এখানে বসান
 
 def process_videos():
     drive_input_dir = Path("/content/drive/MyDrive/Video/input")
