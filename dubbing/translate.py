@@ -21,7 +21,8 @@ def translate_sentences(
 
         translated_tokens = model.generate(
             **inputs,
-            forced_bos_token_id=tokenizer.lang_code_to_id[tgt_lang],
+            forced_bos_token_id=tokenizer.convert_tokens_to_ids(tgt_lang),
+
             max_length=256
         )
         res_text = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
