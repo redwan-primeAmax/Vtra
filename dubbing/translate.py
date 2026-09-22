@@ -1,74 +1,64 @@
-import json
+import torch
 import logging
-import re
 from typing import List, Dict
-import requests
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from dubbing.memory import flush_memory
 
 logger = logging.getLogger("dubbing.translate")
 
-def translate_sentences_api(sentences: List[Dict], api_key: str) -> List[Dict]:
-    if not api_key:
-        raise ValueError("API Key পাওয়া যায়নি! অনুগ্রহ করে সঠিক Gemini API Key সরবরাহ করুন।")
-
+def translate_sentences_local(
+    sentences: List[Dict], 
+    model_name: str = "facebook/nllb-200-1.3B",
+    src_lang: str = "eng_Latn",
+    tgt_lang: str = "ben_Beng",
+    batch_size: int = 16
+) -> List[Dict]:
+    """
+    লোকাল NLLB-200-1.3B মডেল এবং ব্যাচ ইনফারেন্স ব্যবহার করে অতি দ্রুত ও নির্ভুল বাংলা অনুবাদ করে।
+    """
     if not sentences:
         return []
 
-    headers = {"Content-Type": "application/json"}
+    logger.info(f"লোকাল অনুবাদ মডেল লোড হচ্ছে: {model_name}...")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    input_data = [
-        {
-            "id": idx, 
-            "text": item["text"], 
-            "allowed_seconds": item.get("duration", 4.0)
-        } 
-        for idx, item in enumerate(sentences)
-    ]
+    tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=src_lang)
+    model = AutoModelForSeq2SeqLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.float16 if device == "cuda" else torch.float32
+    ).to(device)
 
-    prompt = f"""
-You are a professional video dubbing translator. Translate the English transcript into natural, conversational, spoken Bengali (চলিত বাংলা) suitable for voiceover.
+    texts = [s["text"] for s in sentences]
+    translated_texts = []
+    tgt_lang_id = tokenizer.convert_tokens_to_ids(tgt_lang)
 
-CRITICAL DURATION RULE:
-The translated Bengali voice will be spoken within 'allowed_seconds'. Keep your translation concise, clear, and natural so that it fits smoothly within that time without sounding rushed.
+    # ব্যাচ প্রসেসিং: একসাথে একাধিক বাক্য GPU-তে অনুবাদ হবে (অত্যন্ত দ্রুত)
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=256).to(device)
 
-Return ONLY a valid JSON array of objects with "id" and "tgt_text".
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                forced_bos_token_id=tgt_lang_id,
+                max_length=256,
+                num_beams=2,
+                early_stopping=True
+            )
 
-Input Segments:
-{json.dumps(input_data, ensure_ascii=False)}
-"""
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"response_mime_type": "application/json"}
-    }
-
-    res = requests.post(url, json=payload, headers=headers)
-    if res.status_code != 200:
-        raise RuntimeError(f"Translation API error ({res.status_code}): {res.text}")
-
-    try:
-        response_data = res.json()
-        raw_json = response_data["candidates"][0]["content"]["parts"][0]["text"]
-        
-        json_match = re.search(r'\[.*\]', raw_json, re.DOTALL)
-        if json_match:
-            raw_json = json_match.group(0)
-
-        translated_list = json.loads(raw_json)
-        translated_map = {item["id"]: item["tgt_text"] for item in translated_list}
-    except Exception as e:
-        logger.error(f"API প্রতিক্রিয়া প্রসেস করতে ব্যর্থ: {e}")
-        raise RuntimeError(f"API এর প্রতিক্রিয়া প্রসেস করতে ব্যর্থ: {e}")
+        decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        translated_texts.extend(decoded)
 
     results = []
-    for idx, item in enumerate(sentences):
+    for item, tgt in zip(sentences, translated_texts):
         results.append({
             "start": item["start"],
             "end": item["end"],
             "src_text": item["text"],
-            "tgt_text": translated_map.get(idx, item["text"])
+            "tgt_text": tgt
         })
 
+    del model
+    del tokenizer
     flush_memory()
     return results

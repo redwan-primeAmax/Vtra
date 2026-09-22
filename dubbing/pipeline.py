@@ -3,7 +3,7 @@ from dubbing.config import DubbingConfig
 from dubbing.media import validate_input_file, extract_audio_and_bgm
 from dubbing.transcribe import transcribe_audio
 from dubbing.punctuation import restore_punctuation_and_sentences
-from dubbing.translate import translate_sentences_api
+from dubbing.translate import translate_sentences_local
 from dubbing.tts import synthesize_speech
 from dubbing.mixer import sync_and_assemble_video
 from dubbing.memory import flush_memory
@@ -35,11 +35,11 @@ class DubbingPipeline:
         sentences = restore_punctuation_and_sentences(raw_segments, max_duration=self.config.max_segment_duration)
         flush_memory()
 
-        logger.info("৫/৭: টাইম-কনস্ট্রেইন্ট সহ Gemini API বাংলা অনুবাদ...")
-        translated = translate_sentences_api(sentences, api_key=self.config.api_key)
+        logger.info("৫/৭: লোকাল মডেল দিয়ে বাংলা অনুবাদ (NLLB-200-1.3B Fast Batch)...")
+        translated = translate_sentences_local(sentences, model_name=self.config.translation_model)
         flush_memory()
 
-        logger.info("৬/৭: প্রাকৃতির বাংলা কণ্ঠস্বর সিন্থেসিস (Edge-TTS)...")
+        logger.info("৬/৭: প্রাকৃতিক বাংলা কণ্ঠস্বর সিন্থেসিস (Edge-TTS)...")
         tts_dir = self.config.work_dir / "tts_clips"
         synthesized = synthesize_speech(translated, tts_dir, voice=self.config.tts_voice)
         flush_memory()
@@ -55,4 +55,4 @@ class DubbingPipeline:
         )
         flush_memory()
 
-        logger.info(f"সর্বোচ্চ মানের ডাবিং সম্পন্ন হয়েছে: {self.config.output_video}")
+        logger.info(f"ডাবিং সফলভাবে শেষ হয়েছে: {self.config.output_video}")

@@ -1,10 +1,10 @@
 torch
 transformers
+sentencepiece
 faster-whisper
 soundfile
 numpy
 psutil
 accelerate
-requests
 edge-tts
 demucs
