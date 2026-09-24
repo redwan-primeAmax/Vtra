@@ -3,7 +3,7 @@ from dubbing.config import DubbingConfig
 from dubbing.media import validate_input_file, extract_audio_and_bgm
 from dubbing.transcribe import transcribe_audio
 from dubbing.punctuation import restore_punctuation_and_sentences
-from dubbing.translate import translate_sentences_local
+from dubbing.translate import translate_sentences_google
 from dubbing.tts import synthesize_speech
 from dubbing.mixer import sync_and_assemble_video
 from dubbing.memory import flush_memory
@@ -19,32 +19,28 @@ class DubbingPipeline:
         validate_input_file(self.config.input_video)
         flush_memory()
 
-        logger.info("২/৭: অডিও ও BGM সেপারেশন (Demucs)...")
+        logger.info("২/৭: BGM সেপারেশন (Demucs)...")
         raw_wav, bgm_wav = extract_audio_and_bgm(self.config.input_video, self.config.work_dir)
         flush_memory()
 
         logger.info("৩/৭: ট্রান্সক্রিপশন (Whisper Large-v3)...")
-        raw_segments = transcribe_audio(
-            raw_wav, 
-            model_size=self.config.whisper_model, 
-            compute_type=self.config.compute_type
-        )
+        raw_segments = transcribe_audio(raw_wav, model_size=self.config.whisper_model, compute_type=self.config.compute_type)
         flush_memory()
 
-        logger.info("৪/৭: পাংচুয়েশন ও সেগমেন্টেশন...")
+        logger.info("৪/৭: সেগমেন্টেশন...")
         sentences = restore_punctuation_and_sentences(raw_segments, max_duration=self.config.max_segment_duration)
         flush_memory()
 
-        logger.info("৫/৭: লোকাল মডেল দিয়ে বাংলা অনুবাদ (NLLB-200-1.3B Fast Batch)...")
-        translated = translate_sentences_local(sentences, model_name=self.config.translation_model)
+        logger.info("৫/৭: গুগল ট্রান্সলেট ফিল্টার্ড বাংলা অনুবাদ...")
+        translated = translate_sentences_google(sentences, glossary=self.config.glossary)
         flush_memory()
 
-        logger.info("৬/৭: প্রাকৃতিক বাংলা কণ্ঠস্বর সিন্থেসিস (Edge-TTS)...")
+        logger.info("৬/৭: প্রাকৃতিক বাংলা ভয়েস ওভার (Edge-TTS)...")
         tts_dir = self.config.work_dir / "tts_clips"
         synthesized = synthesize_speech(translated, tts_dir, voice=self.config.tts_voice)
         flush_memory()
 
-        logger.info("৭/৭: অডিও-ভিডিও সিঙ্কিং এবং BGM মিক্সিং...")
+        logger.info("৭/৭: ফাইনাল মিক্সিং ও সিঙ্কিং...")
         sync_and_assemble_video(
             video_path=self.config.input_video,
             bgm_wav=bgm_wav,
@@ -55,4 +51,4 @@ class DubbingPipeline:
         )
         flush_memory()
 
-        logger.info(f"ডাবিং সফলভাবে শেষ হয়েছে: {self.config.output_video}")
+        logger.info(f"ডাবিং সফলভাবে সম্পন্ন হয়েছে: {self.config.output_video}")

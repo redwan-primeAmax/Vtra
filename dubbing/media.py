@@ -6,7 +6,7 @@ from dubbing.memory import flush_memory
 
 def validate_input_file(video_path: Path) -> dict:
     if not video_path.exists():
-        raise InputValidationError(f"ইনপুট ফাইল পাওয়া যায়নি: {video_path}")
+        raise InputValidationError(f"ইনপুট ফাইল পাওয়া যায়নি: {video_path}")
 
     cmd = [
         "ffprobe", "-v", "quiet", "-print_format", "json",
@@ -14,26 +14,21 @@ def validate_input_file(video_path: Path) -> dict:
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
-        raise InputValidationError(f"ffprobe ব্যর্থ হয়েছে: {res.stderr}")
+        raise InputValidationError(f"ffprobe ব্যর্থ হয়েছে: {res.stderr}")
 
     info = json.loads(res.stdout)
     has_audio = any(s.get("codec_type") == "audio" for s in info.get("streams", []))
     has_video = any(s.get("codec_type") == "video" for s in info.get("streams", []))
 
     if not has_video or not has_audio:
-        raise InputValidationError("ইনপুট ফাইলে ভ্যালিড ভিডিও অথবা অডিও স্ট্রিম পাওয়া যায়নি।")
+        raise InputValidationError("ভিডিও বা অডিও স্ট্রিম পাওয়া যায়নি।")
 
     return info
 
 def extract_audio_and_bgm(video_path: Path, work_dir: Path) -> tuple[Path, Path]:
-    """
-    ১. ইনপুট ভিডিও থেকে অডিও এক্সট্র্যাক্ট করে।
-    ২. Demucs ব্যবহার করে আসল ব্যাকগ্রাউন্ড মিউজিক (BGM) পৃথক করে।
-    """
     raw_wav = work_dir / "extracted_16k.wav"
     cmd = [
-        "ffmpeg", "-y",
-        "-i", str(video_path),
+        "ffmpeg", "-y", "-i", str(video_path),
         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
         str(raw_wav)
     ]

@@ -1,4 +1,3 @@
-import os
 import logging
 import shutil
 from pathlib import Path
@@ -29,6 +28,12 @@ def process_videos():
 
     video_files = [f for f in drive_input_dir.iterdir() if f.is_file()]
 
+    # যেসব শব্দ অনুবাদ হবে না তার গ্লসারি তালিকা
+    custom_glossary = [
+        "Ballon d'Or", "Champions League", "Premier League", 
+        "Real Madrid", "Barcelona", "Messi", "Ronaldo"
+    ]
+
     for index, drive_video_path in enumerate(video_files, start=1):
         filename = drive_video_path.name
         stem = drive_video_path.stem
@@ -43,7 +48,8 @@ def process_videos():
             input_video=local_video_path,
             output_video=local_output_video,
             work_dir=local_work_dir,
-            tts_voice="bn-BD-NabanitaNeural"
+            tts_voice="bn-BD-NabanitaNeural",
+            glossary=custom_glossary
         )
 
         try:
@@ -55,7 +61,7 @@ def process_videos():
             logger.info(f"ড্রাইভে সেভ হয়েছে: {drive_final_output}")
 
         except DubbingError as e:
-            logger.error(f"ডাবিং পাইপলাইনে ত্রুটি [{filename}]: {str(e)}")
+            logger.error(f"পাইপলাইন ত্রুটি [{filename}]: {str(e)}")
         except Exception as e:
             logger.error(f"অপ্রত্যাশিত ত্রুটি [{filename}]: {str(e)}", exc_info=True)
         finally:

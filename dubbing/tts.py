@@ -11,7 +11,7 @@ def normalize_bengali_text(text: str) -> str:
     num_map = {'0':'শূন্য', '1':'এক', '2':'দুই', '3':'তিন', '4':'চার', '5':'পাঁচ', '6':'ছয়', '7':'সাত', '8':'আট', '9':'নয়'}
     for k, v in num_map.items():
         text = text.replace(k, v)
-    cleaned = re.sub(r'[^\u0980-\u09FF\s।,!?]', '', text)
+    cleaned = re.sub(r'[^\u0980-\u09FFa-zA-Z\s।,!?]', '', text)
     return re.sub(r'\s+', ' ', cleaned).strip()
 
 async def generate_single_tts(text: str, voice: str, output_path: Path):
@@ -19,9 +19,6 @@ async def generate_single_tts(text: str, voice: str, output_path: Path):
     await communicate.save(str(output_path))
 
 def synthesize_speech(items: List[Dict], output_dir: Path, voice: str = "bn-BD-NabanitaNeural") -> List[Dict]:
-    """
-    Microsoft Edge-TTS ব্যবহার করে সাবলীল ও প্রাকৃতিক বাংলা কণ্ঠস্বর তৈরি করে।
-    """
     output_dir.mkdir(parents=True, exist_ok=True)
     results = []
 

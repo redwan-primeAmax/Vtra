@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import List
 
 @dataclass
 class DubbingConfig:
@@ -9,10 +10,13 @@ class DubbingConfig:
     device: str = "cuda"
     compute_type: str = "float16"
     whisper_model: str = "large-v3"
-    translation_model: str = "facebook/nllb-200-1.3B"  # উন্নত লোকাল ট্রান্সলেশন মডেল
     tts_voice: str = "bn-BD-NabanitaNeural"
     max_segment_duration: float = 5.0
     bgm_volume: float = 0.3
+    # যেসব শব্দ অনুবাদ হবে না তার তালিকা
+    glossary: List[str] = field(default_factory=lambda: [
+        "Ballon d'Or", "Champions League", "Real Madrid", "Barcelona", "Messi", "Ronaldo"
+    ])
 
     def __post_init__(self):
         self.work_dir.mkdir(parents=True, exist_ok=True)

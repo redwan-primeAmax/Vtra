@@ -3,12 +3,7 @@ from typing import List, Dict
 from faster_whisper import WhisperModel
 from dubbing.memory import flush_memory
 
-def transcribe_audio(
-    audio_path: Path, 
-    model_size: str = "large-v3", 
-    device: str = "cuda", 
-    compute_type: str = "float16"
-) -> List[Dict]:
+def transcribe_audio(audio_path: Path, model_size: str = "large-v3", device: str = "cuda", compute_type: str = "float16") -> List[Dict]:
     model = WhisperModel(model_size, device=device, compute_type=compute_type)
 
     segments, _ = model.transcribe(
