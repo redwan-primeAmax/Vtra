@@ -7,5 +7,3 @@ accelerate
 edge-tts
 demucs
 deep-translator
-transformers
-sentencepiece
