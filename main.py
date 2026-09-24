@@ -5,10 +5,10 @@ from dubbing.config import DubbingConfig
 from dubbing.pipeline import DubbingPipeline
 from dubbing.errors import DubbingError
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("main")
 
 def process_videos():
+    # ১. পাথ কনফিগারেশন
     drive_input_dir = Path("/content/drive/MyDrive/Video/input")
     drive_output_dir = Path("/content/drive/MyDrive/Video/output")
 
@@ -28,15 +28,19 @@ def process_videos():
 
     video_files = [f for f in drive_input_dir.iterdir() if f.is_file()]
 
-    # যেসব শব্দ অনুবাদ হবে না তার গ্লসারি তালিকা
     custom_glossary = [
         "Ballon d'Or", "Champions League", "Premier League", 
         "Real Madrid", "Barcelona", "Messi", "Ronaldo"
     ]
 
+    # ৩. লুপ ও এক্সেপশন হ্যান্ডলিং
     for index, drive_video_path in enumerate(video_files, start=1):
         filename = drive_video_path.name
         stem = drive_video_path.stem
+
+        print(f"\n==========================================")
+        print(f"🎬 প্রসেসিং শুরু হচ্ছে ({index}/{len(video_files)}): {filename}")
+        print(f"==========================================")
 
         local_video_path = local_input_dir / filename
         shutil.copy2(drive_video_path, local_video_path)
@@ -58,12 +62,12 @@ def process_videos():
 
             drive_final_output = drive_output_dir / f"dubbed_{stem}.mp4"
             shutil.copy2(local_output_video, drive_final_output)
-            logger.info(f"ড্রাইভে সেভ হয়েছে: {drive_final_output}")
+            logger.info(f"✅ ড্রাইভে সেভ হয়েছে: {drive_final_output.name}")
 
         except DubbingError as e:
-            logger.error(f"পাইপলাইন ত্রুটি [{filename}]: {str(e)}")
+            logger.error(f"❌ পাইপলাইন ত্রুটি [{filename}]: {str(e)}")
         except Exception as e:
-            logger.error(f"অপ্রত্যাশিত ত্রুটি [{filename}]: {str(e)}", exc_info=True)
+            logger.error(f"❌ অপ্রত্যাশিত ত্রুটি [{filename}]: {str(e)}")
         finally:
             if local_video_path.exists(): local_video_path.unlink()
             if local_output_video.exists(): local_output_video.unlink()
