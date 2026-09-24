@@ -7,3 +7,4 @@ accelerate
 edge-tts
 demucs
 deep-translator
+requests
