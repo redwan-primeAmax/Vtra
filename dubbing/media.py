@@ -52,23 +52,39 @@ def extract_audio_and_bgm(video_path: Path, work_dir: Path) -> tuple[Path, Path]
     if res.returncode != 0:
         raise AudioExtractionError(f"অডিও এক্সট্র্যাকশন ত্রুটি: {res.stderr}")
 
-    # ---------- Spleeter (2-stem: vocals + accompaniment) ----------
-    spleeter_out = work_dir / "spleeter_out"
-    spleeter_out.mkdir(exist_ok=True)
+    # ---------- MDX-Net (audio-separator) ----------
+    mdx_out = work_dir / "mdx_out"
+    mdx_out.mkdir(exist_ok=True)
+    models_dir = work_dir / "mdx_models"
+    models_dir.mkdir(exist_ok=True)
 
-    spleeter_cmd = [
-        "spleeter", "separate",
-        "-p", "spleeter:2stems",
-        "-o", str(spleeter_out),
-        str(raw_wav),
-    ]
-    subprocess.run(spleeter_cmd, capture_output=True, text=True)
+    bgm_wav = raw_wav  # ফলব্যাক
+    try:
+        from audio_separator.separator import Separator
 
-    # Spleeter আউটপুট: <spleeter_out>/<input_stem>/accompaniment.wav
-    bgm_wav = spleeter_out / raw_wav.stem / "accompaniment.wav"
-    if not bgm_wav.exists():
-        # কোনো কারণে না পেলে raw_wav-ই BGM হিসেবে ব্যবহার
-        bgm_wav = raw_wav
+        separator = Separator(
+            output_dir=str(mdx_out),
+            model_file_dir=str(models_dir),
+        )
+        separator.load_model(model_filename="UVR-MDX-NET-Inst_HQ_3.onnx")
+        output_files = separator.separate(str(raw_wav))
+
+        for f in output_files:
+            name = Path(f).name.lower()
+            if "instrumental" in name or "no_vocals" in name or "accompaniment" in name:
+                candidate = Path(f) if Path(f).is_absolute() else mdx_out / f
+                if candidate.exists():
+                    bgm_wav = candidate
+                    break
+
+        # কোনো নাম ম্যাচ না করলে প্রথম আউটপুটকেই BGM ধরুন
+        if bgm_wav == raw_wav and output_files:
+            candidate = Path(output_files[0]) if Path(output_files[0]).is_absolute() else mdx_out / output_files[0]
+            if candidate.exists():
+                bgm_wav = candidate
+
+    except Exception as e:
+        print(f"⚠️ MDX-Net সেপারেশন ব্যর্থ, raw WAV-ই BGM: {e}")
 
     flush_memory()
     return raw_wav, bgm_wav

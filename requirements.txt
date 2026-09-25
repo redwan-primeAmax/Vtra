@@ -9,8 +9,8 @@ accelerate
 # ---------- Whisper (Transcription) ----------
 faster-whisper
 
-# ---------- Spleeter (Vocal/BGM Separation) ----------
-spleeter
+# ---------- MDX-Net (Vocal/BGM Separation) ----------
+audio-separator
 
 # ---------- TTS ----------
 edge-tts
