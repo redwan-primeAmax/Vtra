@@ -1,155 +1,173 @@
+"""
+NLLB-200-distilled-600M (INT8, CTranslate2) দিয়ে লোকাল অনুবাদ।
+Google Translate-এর কোনো API/IP ব্যবহার হয় না — সম্পূর্ণ অফলাইন।
+"""
 import re
-import time
-import random
 import logging
-from typing import List, Dict, Tuple
-import requests
-from deep_translator import GoogleTranslator, MyMemoryTranslator
+from pathlib import Path
+from typing import List, Dict, Tuple, Optional
+import ctranslate2
+import sentencepiece as spm
+from huggingface_hub import snapshot_download, hf_hub_download
 from dubbing.memory import flush_memory
 
 logger = logging.getLogger("dubbing.translate")
 
-# ---------- User-Agent rotation (ব্লক কমাতে সহায়ক) ----------
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-]
+# ---------- NLLB-200 ভাষা কোড ----------
+SRC_LANG = "eng_Latn"
+TGT_LANG = "ben_Beng"
 
-def _new_google_translator():
-    # কিছু ক্ষেত্রে Google-এর রিজিওনাল ডোমেইন ব্যবহার করলে ব্লক কম হয়
-    try:
-        return GoogleTranslator(source="en", target="bn")
-    except Exception:
-        return GoogleTranslator(source="auto", target="bn")
+# ---------- মডেল রেপো ----------
+# INT8 pre-converted CT2 মডেল (RAM ~1.2GB)
+CT2_MODEL_REPO = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
+# টোকেনাইজার এই রেপো থেকে নেওয়া হবে
+TOKENIZER_REPO = "facebook/nllb-200-distilled-600M"
 
-# ---------- Glossary placeholders ----------
+# ---------- সিঙ্গেলটন (মডেল শুধু একবার লোড হবে) ----------
+_translator: Optional[ctranslate2.Translator] = None
+_tokenizer: Optional[spm.SentencePieceProcessor] = None
+
+
+def _resolve_device(device: str) -> Tuple[str, str]:
+    """device স্ট্রিং → (ct2_device, compute_type)"""
+    if device in ("cuda", "gpu"):
+        return "cuda", "int8_float16"   # GPU-তে INT8 + FP16
+    return "cpu", "int8"                # CPU-তে pure INT8
+
+
+def _load_model(device: str = "cpu"):
+    """একবারই মডেল লোড হবে (singleton)। দ্বিতীয়বার কল করলে ক্যাশ থেকে দেবে।"""
+    global _translator, _tokenizer
+    if _translator is not None and _tokenizer is not None:
+        return _translator, _tokenizer
+
+    ct2_device, compute_type = _resolve_device(device)
+    logger.info(f"📥 NLLB-200 INT8 লোড হচ্ছে (device={ct2_device}, compute={compute_type})...")
+
+    # ১) CT2 মডেল ডাউনলোড (ক্যাশ হবে ~/.cache/huggingface)
+    model_dir = snapshot_download(
+        repo_id=CT2_MODEL_REPO,
+        allow_patterns=["*.bin", "*.json", "*.txt", "*.model"],
+    )
+
+    # ২) Translator তৈরি
+    _translator = ctranslate2.Translator(
+        model_dir,
+        device=ct2_device,
+        compute_type=compute_type,
+        inter_threads=2,
+        intra_threads=4,
+    )
+
+    # ৩) SentencePiece টোকেনাইজার (মূল facebook রেপো থেকে)
+    spm_path = hf_hub_download(TOKENIZER_REPO, "sentencepiece.bpe.model")
+    _tokenizer = spm.SentencePieceProcessor()
+    _tokenizer.load(spm_path)
+
+    logger.info("✅ NLLB-200 মডেল প্রস্তুত")
+    return _translator, _tokenizer
+
+
+# ---------- Glossary মস্কিং (Messi, Ronaldo ইত্যাদি অপরিবর্তিত রাখতে) ----------
 def apply_glossary_placeholders(text: str, glossary: List[str]) -> Tuple[str, Dict[str, str]]:
     mapping = {}
-    modified_text = text
+    modified = text
     for idx, word in enumerate(glossary):
-        placeholder = f"KEEPWORD{idx}"
+        placeholder = f"ZZKEEP{idx}ZZ"
         pattern = re.compile(re.escape(word), re.IGNORECASE)
-        if pattern.search(modified_text):
-            modified_text = pattern.sub(placeholder, modified_text)
+        if pattern.search(modified):
+            modified = pattern.sub(placeholder, modified)
             mapping[placeholder] = word
-    return modified_text, mapping
+    return modified, mapping
 
-def restore_glossary_words(translated_text: str, mapping: Dict[str, str]) -> str:
-    result = translated_text
-    for placeholder, original_word in mapping.items():
-        result = re.sub(re.escape(placeholder), original_word, result, flags=re.IGNORECASE)
+
+def restore_glossary_words(text: str, mapping: Dict[str, str]) -> str:
+    result = text
+    for placeholder, original in mapping.items():
+        # অনুবাদক কখনো placeholder-এর ভেতরে স্পেস বসায়, তাই loosened regex
+        pattern = re.compile(r"\s*".join(re.escape(c) for c in placeholder), re.IGNORECASE)
+        result = pattern.sub(original, result)
     return result
 
-# ---------- মূল অনুবাদ ফাংশন (Fallback সহ) ----------
-def _translate_google(text: str) -> str:
-    tr = _new_google_translator()
-    return tr.translate(text) or ""
 
-def _translate_mymemory(text: str) -> str:
-    tr = MyMemoryTranslator(source="en-US", target="bn-IN")
-    return tr.translate(text) or ""
+# ---------- মূল অনুবাদ (ব্যাচ) ----------
+def _translate_batch(
+    texts: List[str],
+    device: str = "cpu",
+    beam_size: int = 2,
+    max_batch_size: int = 16,
+) -> List[str]:
+    """একাধিক বাক্য একসাথে অনুবাদ করে — প্রতি বাক্যে আলাদা ইনফারেন্সের চেয়ে অনেক দ্রুত।"""
+    translator, sp = _load_model(device)
 
-def translate_with_retry(text: str, retries: int = 6) -> str:
+    # টোকেনাইজ: প্রতিটি বাক্যের আগে সোর্স ভাষা ট্যাগ
+    tokenized: List[List[str]] = []
+    for text in texts:
+        pieces = sp.encode(text, out_type=str)
+        tokenized.append([SRC_LANG] + pieces + ["</s>"])
+
+    # ব্যাচ অনুবাদ, প্রতিটির টার্গেট প্রিফিক্স বাংলা
+    batch_results = translator.translate_batch(
+        tokenized,
+        target_prefix=[[TGT_LANG]] * len(tokenized),
+        beam_size=beam_size,
+        max_batch_size=max_batch_size,
+        num_hypotheses=1,
+        return_scores=False,
+    )
+
+    outputs: List[str] = []
+    for res in batch_results:
+        hyp = res.hypotheses[0]
+        # প্রথম টোকেন হলো ভাষা ট্যাগ — সরিয়ে দিই
+        if hyp and hyp[0] == TGT_LANG:
+            hyp = hyp[1:]
+        # </s> থাকলে বাদ
+        if "</s>" in hyp:
+            hyp = hyp[: hyp.index("</s>")]
+        text_out = sp.decode(hyp).strip()
+        outputs.append(text_out)
+
+    return outputs
+
+
+# ---------- পাবলিক API (pipeline.py যেভাবে কল করে) ----------
+def translate_sentences_google(
+    sentences: List[Dict],
+    glossary: List[str],
+    device: str = "cpu",
+    batch_size: int = 16,
+) -> List[Dict]:
     """
-    Exponential backoff + jitter সহ অনুবাদ।
-    Google ফেইল করলে MyMemory দিয়ে fallback।
+    আগের google-translator ভার্সনের সাথে হুবহু একই আউটপুট ফরম্যাট।
+    (ফাংশনের নাম ইচ্ছাকৃতভাবে একই রাখা — pipeline.py-তে বদল লাগবে না।)
     """
-    if not text or not text.strip():
-        return ""
-
-    last_error = None
-    for attempt in range(retries):
-        try:
-            # মাঝে মাঝে Google রিকোয়েস্ট করা
-            result = _translate_google(text)
-            if result and result.strip():
-                return result
-        except Exception as e:
-            last_error = e
-            msg = str(e).lower()
-            # ব্লক ডিটেক্ট
-            if any(k in msg for k in ["too many", "429", "blocked", "unusual traffic", "captcha"]):
-                wait = min(60, (2 ** attempt) + random.uniform(0, 2))
-                logger.warning(f"🚫 Google ব্লক শনাক্ত। {wait:.1f}s অপেক্ষা... ({attempt+1}/{retries})")
-            else:
-                wait = min(30, (2 ** attempt) + random.uniform(0, 1))
-                logger.warning(f"⚠️ অনুবাদ রিট্রাই {attempt+1}/{retries} — {wait:.1f}s")
-            time.sleep(wait)
-
-    # Google সব ফেইল → MyMemory দিয়ে চেষ্টা
-    try:
-        logger.warning("🔁 Google ফেইল, MyMemory fallback ব্যবহার করা হচ্ছে...")
-        result = _translate_mymemory(text)
-        if result and result.strip():
-            return result
-    except Exception as e:
-        logger.error(f"❌ MyMemory-ও ফেইল: {e}")
-
-    logger.error(f"❌ সব অনুবাদ fallback ব্যর্থ। মূল টেক্সট রাখা হচ্ছে। শেষ এরর: {last_error}")
-    return text
-
-# ---------- Character-based chunking ----------
-def _chunk_by_chars(items: List[Tuple], max_chars: int = 1500, separator: str = " ||| "):
-    """
-    বাক্যগুলোকে ক্যারেক্টার-লিমিট অনুযায়ী ভাগ করা (Google-এর নিরাপদ সীমা)।
-    """
-    chunks, current, current_len = [], [], 0
-    for it in items:
-        text = it[1]  # masked text
-        add_len = len(text) + len(separator)
-        if current and current_len + add_len > max_chars:
-            chunks.append(current)
-            current, current_len = [], 0
-        current.append(it)
-        current_len += add_len
-    if current:
-        chunks.append(current)
-    return chunks
-
-def translate_sentences_google(sentences: List[Dict], glossary: List[str]) -> List[Dict]:
     if not sentences:
         return []
 
     # ১) Glossary placeholder প্রয়োগ
-    prepared = []
+    prepared: List[Tuple[Dict, str, Dict[str, str]]] = []
     for item in sentences:
         masked, mapping = apply_glossary_placeholders(item["text"], glossary)
         prepared.append((item, masked, mapping))
 
-    # ২) ক্যারেক্টার-ভিত্তিক নিরাপদ চাঙ্কিং
-    chunk_groups = _chunk_by_chars(prepared, max_chars=1500)
-    logger.info(f"🌐 মোট {len(sentences)} বাক্য → {len(chunk_groups)} টি চাঙ্কে অনুবাদ হবে")
+    # ২) ব্যাচে অনুবাদ
+    logger.info(f"🌐 NLLB-200 দিয়ে {len(prepared)} বাক্য অনুবাদ করা হচ্ছে (batch={batch_size})...")
+    results: List[Dict] = []
 
-    results = []
-    for ci, chunk in enumerate(chunk_groups, 1):
-        separator = " ||| "
-        combined = separator.join([c[1] for c in chunk])
+    for start in range(0, len(prepared), batch_size):
+        batch = prepared[start : start + batch_size]
+        src_texts = [b[1] for b in batch]
 
-        translated_combined = translate_with_retry(combined)
+        try:
+            translated_texts = _translate_batch(src_texts, device=device)
+        except Exception as e:
+            logger.error(f"❌ ব্যাচ অনুবাদ ব্যর্থ: {e} — মূল টেক্সট রাখা হচ্ছে।")
+            translated_texts = src_texts  # fallback
 
-        # ৩) সেপারেটর দিয়ে ভাগ করার চেষ্টা (একাধিক ভ্যারিয়েন্ট হ্যান্ডেল)
-        parts = None
-        for sep_variant in [" ||| ", "|||", " | | | ", "\n\n"]:
-            if sep_variant in translated_combined:
-                candidate = [p.strip() for p in translated_combined.split(sep_variant)]
-                if len(candidate) == len(chunk):
-                    parts = candidate
-                    break
-
-        # ৪) ভাগ করতে ব্যর্থ হলে প্রতিটি বাক্য আলাদা করে অনুবাদ (small batch, safe)
-        if parts is None or len(parts) != len(chunk):
-            logger.warning(f"⚠️ চাঙ্ক {ci}: separator mismatch, আলাদা করে অনুবাদ করা হচ্ছে...")
-            parts = []
-            for c in chunk:
-                parts.append(translate_with_retry(c[1]))
-                time.sleep(random.uniform(0.8, 1.8))
-
-        # ৫) Glossary restore
-        for idx, (orig_item, _, mapping) in enumerate(chunk):
-            raw_trans = parts[idx] if idx < len(parts) else orig_item["text"]
-            final_bn = restore_glossary_words(raw_trans, mapping)
+        for idx, (orig_item, _, mapping) in enumerate(batch):
+            raw = translated_texts[idx] if idx < len(translated_texts) else orig_item["text"]
+            final_bn = restore_glossary_words(raw, mapping)
             results.append({
                 "start": orig_item["start"],
                 "end": orig_item["end"],
@@ -157,9 +175,8 @@ def translate_sentences_google(sentences: List[Dict], glossary: List[str]) -> Li
                 "tgt_text": final_bn,
             })
 
-        # ৬) প্রতি চাঙ্কের পর এলোমেলো বিরতি (বট ডিটেকশন এড়াতে)
-        time.sleep(random.uniform(2.5, 4.5))
-        logger.info(f"✅ চাঙ্ক {ci}/{len(chunk_groups)} সম্পন্ন")
+        done = min(start + batch_size, len(prepared))
+        logger.info(f"   ✓ {done}/{len(prepared)} বাক্য অনূদিত")
 
     flush_memory()
     return results

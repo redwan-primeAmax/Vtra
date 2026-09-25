@@ -8,3 +8,6 @@ edge-tts
 demucs
 deep-translator
 requests
+ctranslate2
+sentencepiece
+huggingface_hub
