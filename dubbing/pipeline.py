@@ -8,6 +8,7 @@ from dubbing.translate import translate_sentences_google
 from dubbing.tts import synthesize_speech
 from dubbing.mixer import sync_and_assemble_video
 from dubbing.memory import flush_memory
+from dubbing.predownload import start_all_downloads
 
 logger = logging.getLogger("dubbing.pipeline")
 
@@ -22,6 +23,10 @@ class DubbingPipeline:
         self.config = config
 
     def run(self):
+        # ০) ব্যাকগ্রাউন্ডে সব মডেল ডাউনলোড চালু (pipeline block হবে না)
+        print_step("০/৭: ব্যাকগ্রাউন্ডে মডেল ডাউনলোড শুরু হচ্ছে...")
+        start_all_downloads(whisper_model=self.config.whisper_model)
+
         # ১) ইনপুট ভ্যালিডেশন
         print_step("১/৭: ইনপুট ভ্যালিডেশন...")
         validate_input_file(self.config.input_video)
@@ -51,12 +56,12 @@ class DubbingPipeline:
         )
         flush_memory()
 
-        # ৫) লোকাল NLLB-200 (INT8) দিয়ে বাংলা অনুবাদ — GPU-তে
-        print_step("৫/৭: লোকাল NLLB-200 (INT8, GPU) দিয়ে বাংলা অনুবাদ...")
+        # ৫) লোকাল IndicTrans2 (200M) দিয়ে বাংলা অনুবাদ — GPU-তে
+        print_step("৫/৭: IndicTrans2 (200M, GPU) দিয়ে বাংলা অনুবাদ...")
         translated = translate_sentences_google(
             sentences,
             glossary=self.config.glossary,
-            device=self.config.device,   # "cuda" → ct2 GPU (int8_float16)
+            device=self.config.device,   # "cuda"
             batch_size=16,
         )
         flush_memory()

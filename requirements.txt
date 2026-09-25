@@ -1,13 +1,25 @@
+# ---------- Core ----------
 torch
-faster-whisper
-soundfile
+torchaudio
 numpy
+soundfile
 psutil
 accelerate
-edge-tts
+
+# ---------- Whisper (Transcription) ----------
+faster-whisper
+
+# ---------- Demucs (Vocal/BGM Separation) ----------
 demucs
-deep-translator
-requests
-ctranslate2
+
+# ---------- Translation (IndicTrans2) ----------
+transformers>=4.40
+IndicTransToolkit
 sentencepiece
+protobuf
+
+# ---------- TTS ----------
+edge-tts
+
+# ---------- Utils ----------
 huggingface_hub
