@@ -2,6 +2,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
+from dubbing.glossary import load_glossary
+
+
 @dataclass
 class DubbingConfig:
     input_video: Path
@@ -13,10 +16,9 @@ class DubbingConfig:
     tts_voice: str = "bn-BD-NabanitaNeural"
     max_segment_duration: float = 5.0
     bgm_volume: float = 0.3
-    # যেসব শব্দ অনুবাদ হবে না তার তালিকা
-    glossary: List[str] = field(default_factory=lambda: [
-        "Ballon d'Or", "Champions League", "Real Madrid", "Barcelona", "Messi", "Ronaldo"
-    ])
+
+    # glossary/ ফোল্ডারের সব .txt থেকে অটো-লোড হবে (dedup, order preserved)
+    glossary: List[str] = field(default_factory=load_glossary)
 
     def __post_init__(self):
         self.work_dir.mkdir(parents=True, exist_ok=True)
