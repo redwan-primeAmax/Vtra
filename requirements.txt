@@ -9,8 +9,8 @@ accelerate
 # ---------- Whisper (Transcription) ----------
 faster-whisper
 
-# ---------- Demucs (Vocal/BGM Separation) ----------
-demucs
+# ---------- Spleeter (Vocal/BGM Separation) ----------
+spleeter
 
 # ---------- TTS ----------
 edge-tts

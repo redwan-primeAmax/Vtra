@@ -28,7 +28,7 @@ def validate_input_file(video_path: Path) -> dict:
 
 
 def extract_audio_only(video_path: Path, work_dir: Path) -> Path:
-    """শুধু 16kHz mono WAV এক্সট্র্যাক্ট (Demucs ছাড়া) — transcribe-only মোডের জন্য।"""
+    """শুধু 16kHz mono WAV এক্সট্র্যাক্ট — transcribe-only মোডের জন্য।"""
     raw_wav = work_dir / "extracted_16k.wav"
     cmd = [
         "ffmpeg", "-y", "-i", str(video_path),
@@ -52,15 +52,22 @@ def extract_audio_and_bgm(video_path: Path, work_dir: Path) -> tuple[Path, Path]
     if res.returncode != 0:
         raise AudioExtractionError(f"অডিও এক্সট্র্যাকশন ত্রুটি: {res.stderr}")
 
-    demucs_out = work_dir / "demucs_out"
-    demucs_cmd = [
-        "demucs", "--two-stems=vocals", "-n", "htdemucs",
-        "-o", str(demucs_out), str(raw_wav),
-    ]
-    subprocess.run(demucs_cmd, capture_output=True, text=True)
+    # ---------- Spleeter (2-stem: vocals + accompaniment) ----------
+    spleeter_out = work_dir / "spleeter_out"
+    spleeter_out.mkdir(exist_ok=True)
 
-    bgm_wav = demucs_out / "htdemucs" / "extracted_16k" / "no_vocals.wav"
+    spleeter_cmd = [
+        "spleeter", "separate",
+        "-p", "spleeter:2stems",
+        "-o", str(spleeter_out),
+        str(raw_wav),
+    ]
+    subprocess.run(spleeter_cmd, capture_output=True, text=True)
+
+    # Spleeter আউটপুট: <spleeter_out>/<input_stem>/accompaniment.wav
+    bgm_wav = spleeter_out / raw_wav.stem / "accompaniment.wav"
     if not bgm_wav.exists():
+        # কোনো কারণে না পেলে raw_wav-ই BGM হিসেবে ব্যবহার
         bgm_wav = raw_wav
 
     flush_memory()
