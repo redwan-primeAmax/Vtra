@@ -4,13 +4,14 @@ from pathlib import Path
 from dubbing.errors import InputValidationError, AudioExtractionError
 from dubbing.memory import flush_memory
 
+
 def validate_input_file(video_path: Path) -> dict:
     if not video_path.exists():
         raise InputValidationError(f"ইনপুট ফাইল পাওয়া যায়নি: {video_path}")
 
     cmd = [
         "ffprobe", "-v", "quiet", "-print_format", "json",
-        "-show_format", "-show_streams", str(video_path)
+        "-show_format", "-show_streams", str(video_path),
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
@@ -25,12 +26,27 @@ def validate_input_file(video_path: Path) -> dict:
 
     return info
 
+
+def extract_audio_only(video_path: Path, work_dir: Path) -> Path:
+    """শুধু 16kHz mono WAV এক্সট্র্যাক্ট (Demucs ছাড়া) — transcribe-only মোডের জন্য।"""
+    raw_wav = work_dir / "extracted_16k.wav"
+    cmd = [
+        "ffmpeg", "-y", "-i", str(video_path),
+        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+        str(raw_wav),
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise AudioExtractionError(f"অডিও এক্সট্র্যাকশন ত্রুটি: {res.stderr}")
+    return raw_wav
+
+
 def extract_audio_and_bgm(video_path: Path, work_dir: Path) -> tuple[Path, Path]:
     raw_wav = work_dir / "extracted_16k.wav"
     cmd = [
         "ffmpeg", "-y", "-i", str(video_path),
         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-        str(raw_wav)
+        str(raw_wav),
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
@@ -39,7 +55,7 @@ def extract_audio_and_bgm(video_path: Path, work_dir: Path) -> tuple[Path, Path]
     demucs_out = work_dir / "demucs_out"
     demucs_cmd = [
         "demucs", "--two-stems=vocals", "-n", "htdemucs",
-        "-o", str(demucs_out), str(raw_wav)
+        "-o", str(demucs_out), str(raw_wav),
     ]
     subprocess.run(demucs_cmd, capture_output=True, text=True)
 

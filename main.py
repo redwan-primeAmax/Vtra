@@ -1,4 +1,4 @@
-# ⚠️ সবার আগে runner import — env + logging setup হবে
+# ⚠️ সবার আগে runner import — env + logging setup
 from dubbing import runner  # noqa: F401
 
 import logging
@@ -8,74 +8,148 @@ from pathlib import Path
 from dubbing.config import DubbingConfig
 from dubbing.pipeline import DubbingPipeline
 from dubbing.errors import DubbingError
+from dubbing.media import extract_audio_only
+from dubbing.transcribe import transcribe_audio
+from dubbing.script_io import (
+    find_video_file,
+    find_translated_file,
+    load_translated_segments,
+    save_transcribed_json,
+    save_ai_markdown,
+)
+from dubbing.memory import flush_memory
 
 logger = logging.getLogger("main")
 
+DRIVE_INPUT_PRIMARY = Path("/content/drive/MyDrive/Video/input")
+DRIVE_INPUT_FALLBACK = Path("/content/drive/Video/input")
+DRIVE_OUTPUT_PRIMARY = Path("/content/drive/MyDrive/Video/output")
+DRIVE_OUTPUT_FALLBACK = Path("/content/drive/Video/output")
+
+LOCAL_BASE = Path("/content/local_workspace")
+
+CUSTOM_GLOSSARY = [
+    "Ballon d'Or", "Champions League", "Premier League",
+    "Real Madrid", "Barcelona", "Messi", "Ronaldo",
+]
+
+
+def _resolve_drive_dirs():
+    if DRIVE_INPUT_PRIMARY.exists():
+        return DRIVE_INPUT_PRIMARY, DRIVE_OUTPUT_PRIMARY
+    return DRIVE_INPUT_FALLBACK, DRIVE_OUTPUT_FALLBACK
+
+
+def _transcribe_only(folder: Path, video_path: Path):
+    """translated.json নেই → শুধু transcribe, JSON + AI markdown সেভ।"""
+    print("📝 translated.json নেই — শুধু transcribe হবে")
+    work_dir = LOCAL_BASE / f"transcribe_{video_path.stem}"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    local_video = work_dir / video_path.name
+    shutil.copy2(video_path, local_video)
+
+    try:
+        raw_wav = extract_audio_only(local_video, work_dir)
+        segments = transcribe_audio(
+            raw_wav,
+            model_size="large-v3",
+            device="cuda",
+            compute_type="float16",
+        )
+        flush_memory()
+
+        if not segments:
+            print("❌ কোনো ট্রান্সক্রিপ্ট পাওয়া যায়নি")
+            return
+
+        save_transcribed_json(folder, video_path.stem, segments)
+        save_ai_markdown(folder, video_path.stem, segments, CUSTOM_GLOSSARY)
+
+        print(f"\n✅ সম্পন্ন — এখন অনুবাদ করুন:")
+        print(f"   📄 {video_path.stem}.for_ai.md → ChatGPT/Gemini-এ পেস্ট করুন")
+        print(f"   📄 উত্তর সংরক্ষণ করুন: {video_path.stem}.translated.json")
+        print(f"   📌 তারপর আবার এই নোটবুক চালান")
+    finally:
+        if work_dir.exists():
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _full_pipeline(folder: Path, video_path: Path, translated_path: Path, drive_output: Path):
+    """translated.json আছে → TTS + Mixer চালাও।"""
+    print(f"✅ translated.json পাওয়া গেছে: {translated_path.name}")
+
+    pre_translated = load_translated_segments(translated_path)
+    if not pre_translated:
+        print("❌ translated.json খালি — বাদ")
+        return
+
+    print(f"   মোট {len(pre_translated)} সেগমেন্ট")
+
+    work_dir = LOCAL_BASE / f"work_{video_path.stem}"
+    local_video = work_dir / video_path.name
+    local_output = LOCAL_BASE / "output" / f"dubbed_{video_path.stem}.mp4"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    local_output.parent.mkdir(parents=True, exist_ok=True)
+
+    shutil.copy2(video_path, local_video)
+
+    config = DubbingConfig(
+        input_video=local_video,
+        output_video=local_output,
+        work_dir=work_dir,
+        tts_voice="bn-BD-NabanitaNeural",
+        glossary=CUSTOM_GLOSSARY,
+    )
+
+    try:
+        pipeline = DubbingPipeline(config, pre_translated_segments=pre_translated)
+        pipeline.run()
+
+        final_output = drive_output / folder.name / f"dubbed_{video_path.stem}.mp4"
+        final_output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(local_output, final_output)
+        print(f"✅ Drive-এ সংরক্ষিত: {final_output}")
+    except DubbingError as e:
+        print(f"❌ পাইপলাইন ত্রুটি: {e}")
+    except Exception as e:
+        print(f"❌ অপ্রত্যাশিত ত্রুটি: {e}")
+    finally:
+        if work_dir.exists():
+            shutil.rmtree(work_dir, ignore_errors=True)
+        if local_output.exists():
+            local_output.unlink()
+
 
 def process_videos():
-    # ১. পাথ কনফিগারেশন
-    drive_input_dir = Path("/content/drive/MyDrive/Video/input")
-    drive_output_dir = Path("/content/drive/MyDrive/Video/output")
+    drive_input, drive_output = _resolve_drive_dirs()
+    drive_input.mkdir(parents=True, exist_ok=True)
+    drive_output.mkdir(parents=True, exist_ok=True)
+    LOCAL_BASE.mkdir(parents=True, exist_ok=True)
 
-    if not drive_input_dir.exists():
-        drive_input_dir = Path("/content/drive/Video/input")
-        drive_output_dir = Path("/content/drive/Video/output")
+    subfolders = sorted([d for d in drive_input.iterdir() if d.is_dir()])
+    if not subfolders:
+        print(f"⚠️ কোনো সাবফোল্ডার পাওয়া যায়নি: {drive_input}")
+        return
 
-    drive_input_dir.mkdir(parents=True, exist_ok=True)
-    drive_output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"📂 মোট {len(subfolders)}টি সাবফোল্ডার পাওয়া গেছে")
 
-    local_base_dir = Path("/content/local_workspace")
-    local_input_dir = local_base_dir / "input"
-    local_output_dir = local_base_dir / "output"
+    for idx, folder in enumerate(subfolders, 1):
+        video_path = find_video_file(folder)
+        if not video_path:
+            print(f"\n⚠️ [{idx}] '{folder.name}' এ কোনো ভিডিও নেই — বাদ")
+            continue
 
-    local_input_dir.mkdir(parents=True, exist_ok=True)
-    local_output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n{'=' * 50}")
+        print(f"🎬 [{idx}/{len(subfolders)}] {folder.name} → {video_path.name}")
+        print(f"{'=' * 50}")
 
-    video_files = [f for f in drive_input_dir.iterdir() if f.is_file()]
+        translated_path = find_translated_file(folder)
 
-    custom_glossary = [
-        "Ballon d'Or", "Champions League", "Premier League",
-        "Real Madrid", "Barcelona", "Messi", "Ronaldo"
-    ]
-
-    for index, drive_video_path in enumerate(video_files, start=1):
-        filename = drive_video_path.name
-        stem = drive_video_path.stem
-
-        print(f"\n==========================================")
-        print(f"🎬 প্রসেসিং শুরু হচ্ছে ({index}/{len(video_files)}): {filename}")
-        print(f"==========================================")
-
-        local_video_path = local_input_dir / filename
-        shutil.copy2(drive_video_path, local_video_path)
-
-        local_output_video = local_output_dir / f"dubbed_{stem}.mp4"
-        local_work_dir = local_base_dir / f"work_{stem}"
-
-        config = DubbingConfig(
-            input_video=local_video_path,
-            output_video=local_output_video,
-            work_dir=local_work_dir,
-            tts_voice="bn-BD-NabanitaNeural",
-            glossary=custom_glossary
-        )
-
-        try:
-            pipeline = DubbingPipeline(config)
-            pipeline.run()
-
-            drive_final_output = drive_output_dir / f"dubbed_{stem}.mp4"
-            shutil.copy2(local_output_video, drive_final_output)
-            logger.info(f"✅ ড্রাইভে সেভ হয়েছে: {drive_final_output.name}")
-
-        except DubbingError as e:
-            logger.error(f"❌ পাইপলাইন ত্রুটি [{filename}]: {str(e)}")
-        except Exception as e:
-            logger.error(f"❌ অপ্রত্যাশিত ত্রুটি [{filename}]: {str(e)}")
-        finally:
-            if local_video_path.exists(): local_video_path.unlink()
-            if local_output_video.exists(): local_output_video.unlink()
-            if local_work_dir.exists(): shutil.rmtree(local_work_dir, ignore_errors=True)
+        if translated_path is None:
+            _transcribe_only(folder, video_path)
+        else:
+            _full_pipeline(folder, video_path, translated_path, drive_output)
 
 
 if __name__ == "__main__":
