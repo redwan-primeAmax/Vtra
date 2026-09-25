@@ -12,14 +12,9 @@ faster-whisper
 # ---------- Demucs (Vocal/BGM Separation) ----------
 demucs
 
-# ---------- Translation (IndicTrans2) ----------
-transformers==4.53.3
-IndicTransToolkit
-sentencepiece
-protobuf
-
 # ---------- TTS ----------
 edge-tts
 
 # ---------- Utils ----------
 huggingface_hub
+tqdm<4.67.0
