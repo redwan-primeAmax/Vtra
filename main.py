@@ -17,7 +17,7 @@ from dubbing.script_io import (
     save_transcribed_json,
     save_ai_markdown,
 )
-from dubbing.predownload import start_all_downloads
+from dubbing.glossary import load_glossary
 from dubbing.memory import flush_memory
 
 logger = logging.getLogger("main")
@@ -28,11 +28,6 @@ DRIVE_OUTPUT_PRIMARY = Path("/content/drive/MyDrive/Video/output")
 DRIVE_OUTPUT_FALLBACK = Path("/content/drive/Video/output")
 
 LOCAL_BASE = Path("/content/local_workspace")
-
-CUSTOM_GLOSSARY = [
-    "Ballon d'Or", "Champions League", "Premier League",
-    "Real Madrid", "Barcelona", "Messi", "Ronaldo",
-]
 
 
 def _resolve_drive_dirs():
@@ -64,8 +59,9 @@ def _transcribe_only(folder: Path, video_path: Path):
             print("❌ কোনো ট্রান্সক্রিপ্ট পাওয়া যায়নি")
             return
 
+        glossary = load_glossary()
         save_transcribed_json(folder, video_path.stem, segments)
-        save_ai_markdown(folder, video_path.stem, segments, CUSTOM_GLOSSARY)
+        save_ai_markdown(folder, video_path.stem, segments, glossary)
 
         print(f"\n✅ সম্পন্ন — এখন অনুবাদ করুন:")
         print(f"   📄 {video_path.stem}.for_ai.md → ChatGPT/Gemini-এ পেস্ট করুন")
@@ -100,7 +96,7 @@ def _full_pipeline(folder: Path, video_path: Path, translated_path: Path, drive_
         output_video=local_output,
         work_dir=work_dir,
         tts_voice="bn-BD-NabanitaNeural",
-        glossary=CUSTOM_GLOSSARY,
+        glossary=load_glossary(),
     )
 
     try:
@@ -127,10 +123,6 @@ def process_videos():
     drive_input.mkdir(parents=True, exist_ok=True)
     drive_output.mkdir(parents=True, exist_ok=True)
     LOCAL_BASE.mkdir(parents=True, exist_ok=True)
-
-    # 🚀 ব্যাকগ্রাউন্ডে Demucs + Whisper ডাউনলোড শুরু (কোনো ব্লক নয়)
-    print("🚀 ব্যাকগ্রাউন্ডে মডেল ডাউনলোড শুরু হচ্ছে...")
-    start_all_downloads(whisper_model="large-v3")
 
     subfolders = sorted([d for d in drive_input.iterdir() if d.is_dir()])
     if not subfolders:
