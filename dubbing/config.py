@@ -17,6 +17,12 @@ class DubbingConfig:
     max_segment_duration: float = 5.0
     bgm_volume: float = 0.3
 
+    # ---------- MDX-Net / vocal separation ----------
+    # GPU থাকলে: UVR-MDX-NET-Inst_HQ_3.onnx (উচ্চ কোয়ালিটি)
+    # GPU না থাকলে: অটো-ফলব্যাক হবে হালকা মডেলে (CPU-তে tolerable)
+    mdx_model: str = "UVR-MDX-NET-Inst_HQ_3.onnx"
+    mdx_model_cpu_fallback: str = "UVR-MDX-NET-Inst_Main.onnx"
+
     # glossary/ ফোল্ডারের সব .txt থেকে অটো-লোড হবে (dedup, order preserved)
     glossary: List[str] = field(default_factory=load_glossary)
 
