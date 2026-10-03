@@ -33,9 +33,12 @@ class DubbingPipeline:
         validate_input_file(self.config.input_video)
         flush_memory()
 
-        print_step("২: BGM সেপারেশন (Demucs)...")
+        print_step("২: BGM সেপারেশন (MDX-Net)...")
         raw_wav, bgm_wav = extract_audio_and_bgm(
-            self.config.input_video, self.config.work_dir
+            self.config.input_video,
+            self.config.work_dir,
+            mdx_model=self.config.mdx_model,
+            cpu_fallback_model=self.config.mdx_model_cpu_fallback,
         )
         flush_memory()
 
