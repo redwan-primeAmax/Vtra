@@ -10,7 +10,8 @@ accelerate
 faster-whisper
 
 # ---------- MDX-Net (Vocal/BGM Separation) ----------
-audio-separator
+# [gpu] extra দিলে onnxruntime-gpu ইনস্টল হবে (CPU ভার্সন নয়)
+audio-separator[gpu]
 
 # ---------- TTS ----------
 edge-tts
